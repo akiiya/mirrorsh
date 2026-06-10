@@ -3,7 +3,7 @@
 * text=auto eol=lf
 
 # The main script and tests are shell; never let them become CRLF.
-mirrorsh        text eol=lf
+mirror.sh       text eol=lf
 tests/**        text eol=lf
 *.sh            text eol=lf
 *.yml           text eol=lf

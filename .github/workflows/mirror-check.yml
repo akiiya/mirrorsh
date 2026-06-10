@@ -2,7 +2,7 @@ name: mirror-check
 
 # Online reachability check for the mirror support matrix.
 # Advisory only: continue-on-error keeps it from ever blocking the repo.
-# Probes MUST stay in sync with resolve_base() in ./mirrorsh and the README table.
+# Probes MUST stay in sync with resolve_base() in ./mirror.sh and the README table.
 on:
   workflow_dispatch:
   schedule:
@@ -53,7 +53,7 @@ jobs:
                 debian)       echo "https://deb.debian.org/debian/dists/bookworm/Release" ;;
                 ubuntu)       echo "https://archive.ubuntu.com/ubuntu/dists/noble/Release" ;;
                 ubuntu-ports) echo "https://ports.ubuntu.com/ubuntu-ports/dists/noble/Release" ;;
-                alpine)       echo "https://dl-cdn.alpinelinux.org/alpine/v3.19/main/x86_64/APKINDEX.tar.gz" ;;
+                alpine)       echo "https://dl-cdn.alpinelinux.org/alpine/latest-stable/main/x86_64/APKINDEX.tar.gz" ;;
                 openwrt)      echo "https://downloads.openwrt.org/releases/23.05.5/packages/mipsel_24kc/base/Packages" ;;
               esac
               return
@@ -63,9 +63,12 @@ jobs:
               debian)       echo "https://$h/debian/dists/bookworm/Release" ;;
               ubuntu)       echo "https://$h/ubuntu/dists/noble/Release" ;;
               ubuntu-ports) [ "$m" = 163 ] || echo "https://$h/ubuntu-ports/dists/noble/Release" ;;
-              alpine)       echo "https://$h/alpine/v3.19/main/x86_64/APKINDEX.tar.gz" ;;
+              alpine)       case "$m" in
+                              163|sustech) ;;   # not enabled: site has no /alpine/
+                              *) echo "https://$h/alpine/latest-stable/main/x86_64/APKINDEX.tar.gz" ;;
+                            esac ;;
               openwrt)      case "$m" in
-                              ustc|tuna|aliyun|tencent|huawei|nju|sjtu|bfsu|sustech)
+                              ustc|tuna|aliyun|huawei|nju|sjtu|bfsu|sustech)
                                 echo "https://$h/openwrt/releases/23.05.5/packages/mipsel_24kc/base/Packages" ;;
                             esac ;;
             esac

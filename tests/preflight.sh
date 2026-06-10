@@ -5,7 +5,7 @@
 #   sh tests/preflight.sh
 #
 # Required checks (failure => nonzero exit):
-#   sh -n mirrorsh
+#   sh -n mirror.sh
 #   sh -n tests/run-tests.sh
 #   sh tests/run-tests.sh
 # Optional checks (missing tool => "skipped", never a failure):
@@ -46,14 +46,14 @@ run_optional() { # <name> <tool> <cmd...>
 
 printf '=== mirrorsh preflight (repo: %s) ===\n' "$REPO"
 
-run_required "shell syntax: mirrorsh"        sh -n mirrorsh
+run_required "shell syntax: mirror.sh"       sh -n mirror.sh
 run_required "shell syntax: run-tests.sh"    sh -n tests/run-tests.sh
 run_required "shell syntax: preflight.sh"    sh -n tests/preflight.sh
 run_required "sh tests"                      sh tests/run-tests.sh
 
 run_optional "dash tests"        dash      dash tests/run-tests.sh
 run_optional "busybox sh tests"  busybox   busybox sh tests/run-tests.sh
-run_optional "shellcheck"        shellcheck shellcheck -s sh mirrorsh tests/run-tests.sh tests/preflight.sh
+run_optional "shellcheck"        shellcheck shellcheck -s sh mirror.sh tests/run-tests.sh tests/preflight.sh
 
 printf '\n=====================================\n'
 printf ' preflight summary\n'

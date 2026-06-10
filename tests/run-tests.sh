@@ -9,8 +9,8 @@
 #   MIRRORSH_BACKUP_DIR=<dir> override the primary backup root
 #   MIRRORSH_NO_MAIN=1        source the script without running, to unit-test fns
 
-# Test-harness shellcheck exemptions (not applicable to ./mirrorsh itself):
-#   SC1090 - we source ./mirrorsh dynamically via "$SCRIPT" on purpose
+# Test-harness shellcheck exemptions (not applicable to ./mirror.sh itself):
+#   SC1090 - we source ./mirror.sh dynamically via "$SCRIPT" on purpose
 #   SC2034 - CODENAME/MIRROR/... are read by the sourced functions, not here
 #   SC2329 - run_update/timestamp/system_year stubs are invoked indirectly
 # shellcheck disable=SC1090,SC2034,SC2329
@@ -19,9 +19,9 @@ set -u
 unset CDPATH 2>/dev/null || true
 TESTS_DIR=$(cd -- "$(dirname -- "$0")" && pwd)
 REPO_DIR=$(cd -- "$TESTS_DIR/.." && pwd)
-SCRIPT="$REPO_DIR/mirrorsh"
+SCRIPT="$REPO_DIR/mirror.sh"
 FIX="$TESTS_DIR/fixtures"
-[ -f "$SCRIPT" ] || { echo "找不到 mirrorsh: $SCRIPT" >&2; exit 1; }
+[ -f "$SCRIPT" ] || { echo "找不到 mirror.sh: $SCRIPT" >&2; exit 1; }
 
 PASS=0
 FAIL=0
@@ -348,7 +348,7 @@ assert_no_file "$R/etc/apt/sources.list" "VII.3 无参数无 tty 不修改文件
 
 R=$(new_root debian-bookworm)
 EXIT=0; OUT=$(printf 'garbage\n' | ROOT_DIR="$R" MIRRORSH_FAKE_ARCH=x86_64 MIRRORSH_NO_TTY=1 sh "$SCRIPT") || EXIT=$?
-assert_str_contains "$OUT" "用法:" "VII.4 cat mirrorsh | sh 不卡住, 显示帮助"
+assert_str_contains "$OUT" "用法:" "VII.4 cat mirror.sh | sh 不卡住, 显示帮助"
 
 # VII.7: 未 --yes 且非 dry-run 且无 tty -> 报错, 确认前不写文件
 R=$(new_root debian-bookworm)
@@ -508,6 +508,37 @@ R=$(new_root debian-bookworm)
 OUT=$(run "$R" x86_64 -- --list)
 assert_str_contains "$OUT" "tuna" "--list 包含 tuna"
 assert_str_contains "$OUT" "清华 TUNA" "--list 显示 tuna 中文名"
+
+# ===========================================================================
+section "矩阵下线组合 (mirror-check 实测确认不可用)"
+
+# tencent 无 OpenWrt feed (releases/ 路径 404)
+R=$(new_root openwrt)
+EXIT=0; OUT=$(run "$R" mips -- --mirror tencent --yes --no-update) || EXIT=$?
+assert_exit_nonzero "$EXIT" "tencent 未启用 OpenWrt 时报错退出"
+assert_no_file "$R/etc/apt/sources.list" "tencent OpenWrt 报错时不改文件"
+
+# sustech 无 alpine (/alpine/ 404)
+R=$(new_root alpine-3.19)
+EXIT=0; OUT=$(run "$R" x86_64 -- --mirror sustech --yes --no-update) || EXIT=$?
+assert_exit_nonzero "$EXIT" "sustech 未启用 Alpine 时报错退出"
+
+# 163 无 alpine (/alpine/ 404)
+R=$(new_root alpine-3.19)
+EXIT=0; OUT=$(run "$R" x86_64 -- --mirror 163 --yes --no-update) || EXIT=$?
+assert_exit_nonzero "$EXIT" "163 未启用 Alpine 时报错退出"
+
+# 但这些镜像仍支持各自启用的发行版: tencent/sustech 仍能切 Debian
+R=$(new_root debian-bookworm)
+run "$R" x86_64 -- --mirror tencent --protocol https --yes --no-update >/dev/null
+assert_contains "$R/etc/apt/sources.list" "https://mirrors.tencent.com/debian bookworm" "tencent 仍支持 Debian"
+R=$(new_root debian-bookworm)
+run "$R" x86_64 -- --mirror sustech --protocol https --yes --no-update >/dev/null
+assert_contains "$R/etc/apt/sources.list" "https://mirrors.sustech.edu.cn/debian bookworm" "sustech 仍支持 Debian"
+# sustech 仍支持 openwrt
+R=$(new_root openwrt)
+run "$R" mips -- --mirror sustech --protocol https --yes --no-update >/dev/null
+assert_contains "$R/etc/opkg/distfeeds.conf" "https://mirrors.sustech.edu.cn/openwrt/releases" "sustech 仍支持 OpenWrt"
 
 # ===========================================================================
 section "交互菜单逻辑单测 (resolve_menu_choice)"
