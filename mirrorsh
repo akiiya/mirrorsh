@@ -1,0 +1,1025 @@
+#!/bin/sh
+# mirrorsh - tiny POSIX sh mirror switcher for Linux and embedded devices
+# https://github.com/<owner>/mirrorsh
+#
+# 一个轻量、无依赖、适合 Linux 小设备的软件源切换脚本。
+# 第一版支持: Debian / Ubuntu / Alpine / OpenWrt
+#
+# POSIX sh only. No bash-isms. No python/perl/jq/awk hard dependency.
+# Designed to survive on BusyBox / 随身 WiFi / 软路由 / 嵌入式 Linux.
+#
+# License: MIT
+
+VERSION="v0.1.0"
+
+# ---------------------------------------------------------------------------
+# Path overrides (production defaults to /etc; tests inject ROOT_DIR/ETC_DIR)
+# ---------------------------------------------------------------------------
+ROOT_DIR="${ROOT_DIR:-}"
+ETC_DIR="${ETC_DIR:-${ROOT_DIR}/etc}"
+
+OS_RELEASE="$ETC_DIR/os-release"
+DEBIAN_VERSION="$ETC_DIR/debian_version"
+ALPINE_RELEASE="$ETC_DIR/alpine-release"
+OPENWRT_RELEASE="$ETC_DIR/openwrt_release"
+
+APT_DIR="$ETC_DIR/apt"
+APT_LIST="$APT_DIR/sources.list"
+APT_SOURCES_D="$APT_DIR/sources.list.d"
+APK_REPOS="$ETC_DIR/apk/repositories"
+OPKG_FEEDS="$ETC_DIR/opkg/distfeeds.conf"
+
+CA_FILES="$ETC_DIR/ssl/certs/ca-certificates.crt $ETC_DIR/ssl/cert.pem $ETC_DIR/pki/tls/certs/ca-bundle.crt"
+
+BACKUP_ROOT="${MIRRORSH_BACKUP_DIR:-$ETC_DIR/mirrorsh/backup}"
+
+# ---------------------------------------------------------------------------
+# Runtime options (set by argument parser)
+# ---------------------------------------------------------------------------
+CMD=""              # menu|switch|help|version|list|check|restore
+MIRROR=""
+PROTOCOL="auto"     # auto|http|https
+DRY_RUN=0
+YES=0
+DO_UPDATE=1
+DEBUG=0
+NO_COLOR=0
+SCHEME=""           # resolved http|https
+
+# detected system facts
+DISTRO=""
+DISTRO_VERSION=""
+CODENAME=""
+ARCH=""
+PKG_MGR=""
+
+# per-switch plan (filled by plan_* functions)
+TARGET_FILE=""
+NEW_CONTENT=""
+DISABLE_FILES=""
+OW_ORIG=""
+OW_ORIG_SET=0
+
+# backup state
+BACKUP_DIR=""
+TS=""
+
+# temp file currently being written (for interrupt cleanup)
+MIRRORSH_TMP=""
+
+# ---------------------------------------------------------------------------
+# Output helpers (color is optional, never required)
+# ---------------------------------------------------------------------------
+setup_colors() {
+	if [ "$NO_COLOR" = 1 ] || [ ! -t 1 ]; then
+		C_RED='' C_GRN='' C_YEL='' C_BLU='' C_DIM='' C_RST=''
+	else
+		C_RED='\033[31m' C_GRN='\033[32m' C_YEL='\033[33m'
+		C_BLU='\033[34m' C_DIM='\033[2m' C_RST='\033[0m'
+	fi
+}
+
+say()   { printf '%s\n' "$*"; }
+info()  { printf '%b%s%b\n' "$C_BLU" "$*" "$C_RST"; }
+ok()    { printf '%b%s%b\n' "$C_GRN" "$*" "$C_RST"; }
+warn()  { printf '%b%s%b\n' "$C_YEL" "$*" "$C_RST" >&2; }
+err()   { printf '%b%s%b\n' "$C_RED" "$*" "$C_RST" >&2; }
+debug() { [ "$DEBUG" = 1 ] && printf '%b[debug] %s%b\n' "$C_DIM" "$*" "$C_RST" >&2; return 0; }
+die()   { err "错误: $*"; exit 1; }
+
+have() { command -v "$1" >/dev/null 2>&1; }
+
+# directory of a path without the dirname binary
+dir_of() { case "$1" in */*) printf '%s' "${1%/*}";; *) printf '%s' ".";; esac; }
+
+# ---------------------------------------------------------------------------
+# Help / version
+# ---------------------------------------------------------------------------
+show_version() { say "mirrorsh $VERSION"; }
+
+show_help() {
+	cat <<EOF
+mirrorsh $VERSION - tiny POSIX sh mirror switcher
+轻量、无依赖、适合 Linux 小设备的软件源切换脚本
+
+用法:
+  sh mirrorsh                      进入交互式菜单 (需要 /dev/tty)
+  sh mirrorsh [选项]
+
+选项:
+  --help                显示本帮助
+  --version             显示版本号
+  --list                列出支持的镜像与当前系统可用镜像
+  --check               只检测系统信息, 不修改任何文件
+  --mirror <name>       指定镜像, 如 ustc / aliyun / official
+  --protocol <p>        协议 auto|http|https (默认 auto)
+  --dry-run             只打印将写入内容, 不修改系统
+  --yes                 跳过确认
+  --no-update           切换后不执行 apt/apk/opkg update
+  --restore             恢复最近一次 mirrorsh 备份
+  --debug               输出更多诊断信息
+  --no-color            禁用彩色输出
+
+典型用法:
+  sh mirrorsh --check
+  sh mirrorsh --list
+  sh mirrorsh --mirror ustc --dry-run
+  sh mirrorsh --mirror aliyun --yes
+  sh mirrorsh --mirror official --yes
+  sh mirrorsh --mirror ustc --protocol http --yes
+  sh mirrorsh --restore
+
+第一版支持: Debian / Ubuntu / Alpine / OpenWrt
+mirrorsh 只切换软件源并执行 update, 不会执行 upgrade/full-upgrade。
+EOF
+}
+
+# ---------------------------------------------------------------------------
+# Argument parsing
+# ---------------------------------------------------------------------------
+parse_args() {
+	had_args=0
+	while [ $# -gt 0 ]; do
+		had_args=1
+		case "$1" in
+			--help|-h)      CMD="help" ;;
+			--version|-V)   CMD="version" ;;
+			--list)         CMD="list" ;;
+			--check)        CMD="check" ;;
+			--restore)      CMD="restore" ;;
+			--mirror)       shift; [ $# -gt 0 ] || die "--mirror 需要一个参数"; MIRROR="$1"; CMD="switch" ;;
+			--mirror=*)     MIRROR="${1#--mirror=}"; CMD="switch" ;;
+			--protocol)     shift; [ $# -gt 0 ] || die "--protocol 需要一个参数"; PROTOCOL="$1" ;;
+			--protocol=*)   PROTOCOL="${1#--protocol=}" ;;
+			--dry-run)      DRY_RUN=1 ;;
+			--yes|-y)       YES=1 ;;
+			--no-update)    DO_UPDATE=0 ;;
+			--debug)        DEBUG=1 ;;
+			--no-color)     NO_COLOR=1 ;;
+			--)             ;;
+			*)              die "未知参数: $1 （用 --help 查看帮助）" ;;
+		esac
+		shift
+	done
+
+	case "$PROTOCOL" in
+		auto|http|https) ;;
+		*) die "无效的 --protocol: $PROTOCOL （只能是 auto|http|https）" ;;
+	esac
+
+	# Resolve final command:
+	#   no args            -> interactive menu
+	#   args but no command -> switch (will require --mirror)
+	if [ -z "$CMD" ]; then
+		if [ "$had_args" = 0 ]; then CMD="menu"; else CMD="switch"; fi
+	fi
+}
+
+# ---------------------------------------------------------------------------
+# System detection
+# ---------------------------------------------------------------------------
+osr() { # read a key from os-release, strip quotes
+	[ -f "$OS_RELEASE" ] || return 0
+	o_v=$(grep -E "^$1=" "$OS_RELEASE" 2>/dev/null | sed -n '1p' | cut -d= -f2-)
+	o_v=${o_v#\"}; o_v=${o_v%\"}
+	printf '%s' "$o_v"
+}
+
+map_arch() {
+	case "$1" in
+		x86_64)        printf 'amd64' ;;
+		aarch64)       printf 'arm64' ;;
+		armv7l|armv6l) printf 'armhf' ;;
+		i386|i686)     printf 'i386' ;;
+		riscv64)       printf 'riscv64' ;;
+		ppc64el|ppc64le) printf 'ppc64el' ;;
+		s390x)         printf 's390x' ;;
+		*)             printf '%s' "$1" ;;
+	esac
+}
+
+detect_arch() {
+	raw="${MIRRORSH_FAKE_ARCH:-$(uname -m 2>/dev/null)}"
+	[ -n "$raw" ] || raw="unknown"
+	ARCH=$(map_arch "$raw")
+	debug "arch raw=$raw mapped=$ARCH"
+}
+
+# best-effort Debian codename from /etc/debian_version
+debian_codename_from_version() {
+	[ -f "$DEBIAN_VERSION" ] || return 0
+	dv=$(sed -n '1p' "$DEBIAN_VERSION")
+	case "$dv" in
+		*/sid|sid|trixie*) printf 'trixie' ;;
+		13.*|13)           printf 'trixie' ;;
+		12.*|12)           printf 'bookworm' ;;
+		11.*|11)           printf 'bullseye' ;;
+		10.*|10)           printf 'buster' ;;
+		bookworm*)         printf 'bookworm' ;;
+		bullseye*)         printf 'bullseye' ;;
+		buster*)           printf 'buster' ;;
+		*)                 printf '' ;;
+	esac
+}
+
+detect_system() {
+	detect_arch
+
+	id_=$(osr ID)
+	id_like=$(osr ID_LIKE)
+	DISTRO_VERSION=$(osr VERSION_ID)
+	CODENAME=$(osr VERSION_CODENAME)
+	ubuntu_cn=$(osr UBUNTU_CODENAME)
+
+	case "$id_" in
+		debian)  DISTRO="debian" ;;
+		ubuntu)  DISTRO="ubuntu" ;;
+		alpine)  DISTRO="alpine" ;;
+		openwrt) DISTRO="openwrt" ;;
+		"")      DISTRO="" ;;
+		*)
+			# fall back to ID_LIKE
+			case " $id_like " in
+				*" ubuntu "*) DISTRO="ubuntu" ;;
+				*" debian "*) DISTRO="debian" ;;
+				*) DISTRO="" ;;
+			esac
+			;;
+	esac
+
+	# fallback files when os-release missing/unknown
+	if [ -z "$DISTRO" ]; then
+		if [ -f "$OPENWRT_RELEASE" ]; then DISTRO="openwrt"
+		elif [ -f "$ALPINE_RELEASE" ]; then DISTRO="alpine"
+		elif [ -f "$DEBIAN_VERSION" ]; then DISTRO="debian"
+		fi
+	fi
+
+	[ -n "$DISTRO" ] || die "无法识别当前系统 (缺少 $OS_RELEASE 及回退文件)。为安全起见不做任何修改。"
+
+	# refine codename / version per distro
+	case "$DISTRO" in
+		ubuntu)
+			[ -n "$ubuntu_cn" ] && CODENAME="$ubuntu_cn"
+			PKG_MGR="apt"
+			;;
+		debian)
+			if [ -z "$CODENAME" ]; then
+				CODENAME=$(debian_codename_from_version)
+			fi
+			PKG_MGR="apt"
+			;;
+		alpine)
+			[ -f "$ALPINE_RELEASE" ] && DISTRO_VERSION=$(sed -n '1p' "$ALPINE_RELEASE")
+			PKG_MGR="apk"
+			;;
+		openwrt)
+			PKG_MGR="opkg"
+			;;
+	esac
+
+	debug "distro=$DISTRO version=$DISTRO_VERSION codename=$CODENAME pkg=$PKG_MGR"
+}
+
+detected_source_files() {
+	dsf=""
+	for f in "$APT_LIST" "$APT_SOURCES_D/debian.sources" "$APT_SOURCES_D/ubuntu.sources" "$APK_REPOS" "$OPKG_FEEDS"; do
+		[ -f "$f" ] && dsf="$dsf $f"
+	done
+	printf '%s' "${dsf# }"
+}
+
+# ---------------------------------------------------------------------------
+# Mirror support matrix
+#   resolve_base <mirror> <repo_key>  ->  host+path WITHOUT scheme (empty=unsupported)
+#   repo_key: debian | ubuntu | ubuntu-ports | alpine | openwrt
+#
+# Only combinations the maintainer is confident about are enabled. Unverified
+# foreign mirrors are intentionally deferred (see README) — never emit a URL we
+# cannot stand behind.
+# ---------------------------------------------------------------------------
+MIRRORS_CN="ustc aliyun tencent huawei nju sjtu 163 bfsu zju sustech lzu"
+MIRRORS_INTL="official"
+
+mirror_known() {
+	for m in $MIRRORS_CN $MIRRORS_INTL; do
+		[ "$1" = "$m" ] && return 0
+	done
+	return 1
+}
+
+mirror_name() {
+	case "$1" in
+		ustc)    printf '中科大 USTC' ;;
+		aliyun)  printf '阿里云 Aliyun' ;;
+		tencent) printf '腾讯云 Tencent' ;;
+		huawei)  printf '华为云 Huawei' ;;
+		nju)     printf '南京大学 NJU' ;;
+		sjtu)    printf '上海交大 SJTU' ;;
+		163)     printf '网易 163' ;;
+		bfsu)    printf '北京外国语 BFSU' ;;
+		zju)     printf '浙江大学 ZJU' ;;
+		sustech) printf '南方科技大学 SUSTech' ;;
+		lzu)     printf '兰州大学 LZU' ;;
+		official) printf '官方源 Official' ;;
+		*)       printf '%s' "$1" ;;
+	esac
+}
+
+resolve_official() {
+	case "$1" in
+		debian)       printf 'deb.debian.org/debian' ;;
+		ubuntu)       printf 'archive.ubuntu.com/ubuntu' ;;
+		ubuntu-ports) printf 'ports.ubuntu.com/ubuntu-ports' ;;
+		alpine)       printf 'dl-cdn.alpinelinux.org/alpine' ;;
+		openwrt)      printf 'downloads.openwrt.org' ;;
+	esac
+}
+
+resolve_base() {
+	rb_m=$1; rb_d=$2
+	if [ "$rb_m" = official ]; then resolve_official "$rb_d"; return; fi
+	case "$rb_m" in
+		ustc)    rb_h=mirrors.ustc.edu.cn ;;
+		aliyun)  rb_h=mirrors.aliyun.com ;;
+		tencent) rb_h=mirrors.tencent.com ;;
+		huawei)  rb_h=mirrors.huaweicloud.com ;;
+		nju)     rb_h=mirrors.nju.edu.cn ;;
+		sjtu)    rb_h=mirror.sjtu.edu.cn ;;
+		bfsu)    rb_h=mirrors.bfsu.edu.cn ;;
+		zju)     rb_h=mirrors.zju.edu.cn ;;
+		sustech) rb_h=mirrors.sustech.edu.cn ;;
+		lzu)     rb_h=mirror.lzu.edu.cn ;;
+		163)     rb_h=mirrors.163.com ;;
+		*)       return 0 ;;
+	esac
+	case "$rb_d" in
+		debian) printf '%s' "$rb_h/debian" ;;
+		ubuntu) printf '%s' "$rb_h/ubuntu" ;;
+		ubuntu-ports)
+			case "$rb_m" in
+				163) : ;;                        # 163 has no ubuntu-ports
+				*)   printf '%s' "$rb_h/ubuntu-ports" ;;
+			esac ;;
+		alpine) printf '%s' "$rb_h/alpine" ;;
+		openwrt)
+			case "$rb_m" in
+				ustc|aliyun|tencent|huawei|nju|sjtu|bfsu|sustech)
+					printf '%s' "$rb_h/openwrt" ;;
+				*) : ;;                          # 163/zju/lzu not enabled for openwrt
+			esac ;;
+	esac
+}
+
+is_ports_arch() {
+	case "$ARCH" in
+		amd64|i386) return 1 ;;
+		*)          return 0 ;;
+	esac
+}
+
+repo_key_for_distro() {
+	case "$DISTRO" in
+		debian)  printf 'debian' ;;
+		ubuntu)  if is_ports_arch; then printf 'ubuntu-ports'; else printf 'ubuntu'; fi ;;
+		alpine)  printf 'alpine' ;;
+		openwrt) printf 'openwrt' ;;
+	esac
+}
+
+# All known mirror hosts (for current-mirror detection / openwrt rewrite)
+known_openwrt_bases() {
+	cat <<'EOF'
+downloads.openwrt.org
+mirrors.ustc.edu.cn/openwrt
+mirrors.aliyun.com/openwrt
+mirrors.tencent.com/openwrt
+mirrors.huaweicloud.com/openwrt
+mirrors.nju.edu.cn/openwrt
+mirror.sjtu.edu.cn/openwrt
+mirrors.bfsu.edu.cn/openwrt
+mirrors.sustech.edu.cn/openwrt
+EOF
+}
+
+# ---------------------------------------------------------------------------
+# Protocol decision (auto)
+# ---------------------------------------------------------------------------
+has_ca_certs() {
+	for f in $CA_FILES; do
+		[ -f "$f" ] && return 0
+	done
+	return 1
+}
+
+system_year() {
+	y=$(date +%Y 2>/dev/null)
+	case "$y" in
+		''|*[!0-9]*) printf '0' ;;
+		*)           printf '%s' "$y" ;;
+	esac
+}
+
+suitable_https() {
+	y=$(system_year)
+	if [ "$y" -lt 2020 ] 2>/dev/null; then
+		debug "https unsuitable: system year $y < 2020"
+		return 1
+	fi
+	if ! has_ca_certs; then
+		debug "https unsuitable: no CA bundle found"
+		return 1
+	fi
+	debug "https suitable: year=$y, CA bundle present"
+	return 0
+}
+
+decide_scheme() {
+	case "$PROTOCOL" in
+		http)  printf 'http' ;;
+		https) printf 'https' ;;
+		auto)  if suitable_https; then printf 'https'; else printf 'http'; fi ;;
+	esac
+}
+
+# ---------------------------------------------------------------------------
+# Content generation (pure: write to stdout, never touch the filesystem)
+# ---------------------------------------------------------------------------
+debian_comp() {
+	# bookworm(12)+ adds non-free-firmware
+	case "$CODENAME" in
+		bookworm|trixie|forky|sid) printf 'main contrib non-free non-free-firmware' ;;
+		buster|bullseye)           printf 'main contrib non-free' ;;
+		*)
+			# unknown codename: fall back on VERSION_ID number if numeric
+			case "$DISTRO_VERSION" in
+				1[2-9]|[2-9][0-9]) printf 'main contrib non-free non-free-firmware' ;;
+				*)                 printf 'main contrib non-free' ;;
+			esac ;;
+	esac
+}
+
+gen_debian() {
+	[ -n "$CODENAME" ] || die "无法识别 Debian 版本代号 (codename)。为安全起见不做任何修改。"
+	base=$(resolve_base "$MIRROR" debian)
+	[ -n "$base" ] || die "镜像 [$MIRROR] 未启用 Debian 支持。"
+	comp=$(debian_comp)
+	sec_scheme="$SCHEME"
+	cat <<EOF
+# Generated by mirrorsh $VERSION ($MIRROR, $SCHEME) - $CODENAME
+deb $SCHEME://$base $CODENAME $comp
+deb $SCHEME://$base $CODENAME-updates $comp
+deb $sec_scheme://security.debian.org/debian-security $CODENAME-security $comp
+EOF
+}
+
+gen_ubuntu() {
+	[ -n "$CODENAME" ] || die "无法识别 Ubuntu 版本代号 (codename)。为安全起见不做任何修改。"
+	key=$(repo_key_for_distro)
+	base=$(resolve_base "$MIRROR" "$key")
+	if [ -z "$base" ]; then
+		if [ "$key" = ubuntu-ports ]; then
+			die "镜像 [$MIRROR] 不支持 Ubuntu ports 架构 ($ARCH)。"
+		fi
+		die "镜像 [$MIRROR] 未启用 Ubuntu 支持。"
+	fi
+	comp="main restricted universe multiverse"
+	cat <<EOF
+# Generated by mirrorsh $VERSION ($MIRROR, $SCHEME) - $CODENAME ($ARCH)
+deb $SCHEME://$base $CODENAME $comp
+deb $SCHEME://$base $CODENAME-updates $comp
+deb $SCHEME://$base $CODENAME-security $comp
+deb $SCHEME://$base $CODENAME-backports $comp
+EOF
+}
+
+alpine_branch() {
+	# keep edge if the system is already on edge
+	if [ -f "$APK_REPOS" ] && grep -q '/edge/' "$APK_REPOS" 2>/dev/null; then
+		printf 'edge'; return
+	fi
+	[ -f "$ALPINE_RELEASE" ] || die "无法读取 $ALPINE_RELEASE。"
+	rel=$(sed -n '1p' "$ALPINE_RELEASE")
+	case "$rel" in
+		*edge*|*_alpha*|*_beta*) printf 'edge'; return ;;
+	esac
+	mm=$(printf '%s' "$rel" | cut -d. -f1,2)
+	case "$mm" in
+		[0-9]*.[0-9]*) printf 'v%s' "$mm" ;;
+		*)             die "无法解析 Alpine 版本: $rel" ;;
+	esac
+}
+
+gen_alpine() {
+	base=$(resolve_base "$MIRROR" alpine)
+	[ -n "$base" ] || die "镜像 [$MIRROR] 未启用 Alpine 支持。"
+	br=$(alpine_branch)
+	cat <<EOF
+$SCHEME://$base/$br/main
+$SCHEME://$base/$br/community
+EOF
+}
+
+# OpenWrt: only swap the base host of EXISTING feed URLs; keep the rest.
+openwrt_transform() {
+	# args: new_base scheme ; reads stdin, writes transformed to stdout
+	ot_new=$1; ot_scheme=$2
+	sed_args=""
+	for ob in $(known_openwrt_bases); do
+		esc=$(printf '%s' "$ob" | sed 's/[.\\]/\\&/g')
+		sed_args="$sed_args -e s#https://$esc#$ot_scheme://$ot_new#g"
+		sed_args="$sed_args -e s#http://$esc#$ot_scheme://$ot_new#g"
+	done
+	# shellcheck disable=SC2086
+	sed $sed_args
+}
+
+gen_openwrt() {
+	[ -f "$OPKG_FEEDS" ] || die "未找到 $OPKG_FEEDS，无法切换 OpenWrt 源。为安全起见不做任何修改。"
+	newbase=$(resolve_base "$MIRROR" openwrt)
+	[ -n "$newbase" ] || die "镜像 [$MIRROR] 未启用 OpenWrt 支持。"
+	if [ "$OW_ORIG_SET" = 0 ]; then
+		OW_ORIG=$(cat "$OPKG_FEEDS")
+		OW_ORIG_SET=1
+	fi
+	printf '%s\n' "$OW_ORIG" | openwrt_transform "$newbase" "$SCHEME"
+}
+
+# ---------------------------------------------------------------------------
+# Plan builders: fill TARGET_FILE / NEW_CONTENT / DISABLE_FILES / TARGET_EXISTS
+# ---------------------------------------------------------------------------
+plan_debian() {
+	TARGET_FILE="$APT_LIST"
+	NEW_CONTENT=$(gen_debian)
+	DISABLE_FILES=""
+	[ -f "$APT_SOURCES_D/debian.sources" ] && DISABLE_FILES="$APT_SOURCES_D/debian.sources"
+}
+
+plan_ubuntu() {
+	TARGET_FILE="$APT_LIST"
+	NEW_CONTENT=$(gen_ubuntu)
+	DISABLE_FILES=""
+	[ -f "$APT_SOURCES_D/ubuntu.sources" ] && DISABLE_FILES="$APT_SOURCES_D/ubuntu.sources"
+}
+
+plan_alpine() {
+	TARGET_FILE="$APK_REPOS"
+	NEW_CONTENT=$(gen_alpine)
+	DISABLE_FILES=""
+}
+
+plan_openwrt() {
+	TARGET_FILE="$OPKG_FEEDS"
+	NEW_CONTENT=$(gen_openwrt)
+	DISABLE_FILES=""
+	if [ "$NEW_CONTENT" = "$OW_ORIG" ]; then
+		warn "未在 $OPKG_FEEDS 中找到可识别的官方/镜像基础地址，feed 未变化。"
+	fi
+}
+
+build_plan() {
+	case "$DISTRO" in
+		debian)  plan_debian ;;
+		ubuntu)  plan_ubuntu ;;
+		alpine)  plan_alpine ;;
+		openwrt) plan_openwrt ;;
+		*)       die "不支持的发行版: $DISTRO（第一版仅支持 Debian/Ubuntu/Alpine/OpenWrt）" ;;
+	esac
+	[ -n "$TARGET_FILE" ]  || die "内部错误: 目标文件为空"
+	[ -n "$NEW_CONTENT" ]  || die "内部错误: 生成内容为空，已中止"
+}
+
+print_plan() {
+	info "== 将要修改的文件 =="
+	for f in $DISABLE_FILES; do
+		say "  禁用并备份: $f  ->  $f.mirrorsh.bak.<ts>"
+	done
+	say "  写入: $TARGET_FILE"
+	say ""
+	info "== 新内容 ($TARGET_FILE) =="
+	printf '%s\n' "$NEW_CONTENT" | sed 's/^/  | /'
+	say ""
+}
+
+# ---------------------------------------------------------------------------
+# Backup
+# ---------------------------------------------------------------------------
+timestamp() { date +%Y%m%d-%H%M%S 2>/dev/null || printf '00000000-000000'; }
+
+# try_backup_root <dir>: create it AND prove it is writable. 0 on success.
+try_backup_root() {
+	mkdir -p "$1" 2>/dev/null || return 1
+	tbr_t="$1/.mirrorsh.wtest.$$"
+	if : > "$tbr_t" 2>/dev/null; then
+		rm -f "$tbr_t" 2>/dev/null
+		return 0
+	fi
+	return 1
+}
+
+backup_init() {
+	# Pick a writable backup root: primary, else /root fallback.
+	if ! try_backup_root "$BACKUP_ROOT"; then
+		BACKUP_ROOT="${ROOT_DIR}/root/mirrorsh-backup"
+		try_backup_root "$BACKUP_ROOT" \
+			|| die "无法创建可写的备份目录 (尝试过 $ETC_DIR/mirrorsh/backup 和 $BACKUP_ROOT)。已中止, 未修改系统。"
+	fi
+
+	# Unique per-run dir; never reuse an existing one (avoids same-second clash).
+	bi_base=$(timestamp)
+	TS="$bi_base"
+	bi_n=0
+	while [ -e "$BACKUP_ROOT/$TS" ]; do
+		bi_n=$((bi_n + 1))
+		TS="$bi_base-$bi_n"
+	done
+	BACKUP_DIR="$BACKUP_ROOT/$TS"
+	mkdir "$BACKUP_DIR" 2>/dev/null || die "无法创建备份目录: $BACKUP_DIR。已中止, 未修改系统。"
+	: > "$BACKUP_DIR/manifest" || die "备份目录不可写: $BACKUP_DIR。已中止, 未修改系统。"
+	debug "backup dir: $BACKUP_DIR"
+}
+
+backup_file() { # path -> echoes flattened relname stored in BACKUP_DIR
+	bf_s=$1
+	bf_n=$(printf '%s' "$bf_s" | sed 's#^/##; s#/#_#g')
+	cp "$bf_s" "$BACKUP_DIR/$bf_n" || die "备份失败: $bf_s"
+	printf '%s' "$bf_n"
+}
+
+record() { printf '%s\t%s\t%s\n' "$1" "${2:-}" "${3:-}" >> "$BACKUP_DIR/manifest"; }
+
+write_meta() {
+	{
+		printf 'timestamp=%s\n' "$TS"
+		printf 'distro=%s\n' "$DISTRO"
+		printf 'version=%s\n' "$DISTRO_VERSION"
+		printf 'codename=%s\n' "$CODENAME"
+		printf 'arch=%s\n' "$ARCH"
+		printf 'mirror=%s\n' "$MIRROR"
+		printf 'protocol=%s\n' "$SCHEME"
+		printf 'source_files=%s\n' "$TARGET_FILE $DISABLE_FILES"
+	} > "$BACKUP_DIR/metadata" || die "无法写入备份 metadata"
+}
+
+# ---------------------------------------------------------------------------
+# Atomic write
+# ---------------------------------------------------------------------------
+write_file() { # path content
+	wf_p=$1; wf_c=$2
+	wf_d=$(dir_of "$wf_p")
+	[ -d "$wf_d" ] || mkdir -p "$wf_d" || die "无法创建目录: $wf_d"
+	if have mktemp; then
+		wf_t=$(mktemp "$wf_d/.mirrorsh.XXXXXX" 2>/dev/null) || wf_t="$wf_p.mirrorsh.tmp.$$"
+	else
+		wf_t="$wf_p.mirrorsh.tmp.$$"
+	fi
+	MIRRORSH_TMP="$wf_t"
+	printf '%s\n' "$wf_c" > "$wf_t" || die "写入失败: $wf_t"
+	mv "$wf_t" "$wf_p" || die "替换文件失败: $wf_p"
+	MIRRORSH_TMP=""
+}
+
+# ---------------------------------------------------------------------------
+# Apply plan (backup -> disable -> write), with reverse-op manifest
+# ---------------------------------------------------------------------------
+apply_plan() {
+	backup_init
+	write_meta
+
+	# 1. disable .sources files (back them up first)
+	for f in $DISABLE_FILES; do
+		[ -f "$f" ] || continue
+		backup_file "$f" >/dev/null
+		mv "$f" "$f.mirrorsh.bak.$TS" || die "禁用 .sources 失败: $f"
+		record RENAME "$f.mirrorsh.bak.$TS" "$f"
+		info "已禁用并备份: $f"
+	done
+
+	# 2. backup the target if it exists, else mark it for removal on restore
+	if [ -f "$TARGET_FILE" ]; then
+		bn=$(backup_file "$TARGET_FILE")
+		record COPY "$bn" "$TARGET_FILE"
+	else
+		record REMOVE "$TARGET_FILE"
+	fi
+
+	# 3. write new content
+	write_file "$TARGET_FILE" "$NEW_CONTENT"
+	info "已写入: $TARGET_FILE"
+	ok "备份保存在: $BACKUP_DIR"
+}
+
+# ---------------------------------------------------------------------------
+# Restore most recent backup
+# ---------------------------------------------------------------------------
+do_restore() {
+	root="$BACKUP_ROOT"
+	[ -d "$root" ] || { root="${ROOT_DIR}/root/mirrorsh-backup"; }
+	[ -d "$root" ] || die "没有找到任何 mirrorsh 备份目录。"
+	last=""
+	for d in "$root"/*/; do
+		[ -d "$d" ] && last="$d"
+	done
+	[ -n "$last" ] || die "没有可恢复的备份。"
+	man="${last%/}/manifest"
+	[ -f "$man" ] || die "备份缺少 manifest: $last。已中止恢复, 未做任何修改。"
+
+	# Pass 1: validate the whole manifest BEFORE touching anything.
+	# A corrupt/empty manifest must abort cleanly, never restore partially.
+	dr_ops=0
+	dr_bad=0
+	while IFS='	' read -r op a b; do
+		[ -n "$op" ] || continue
+		case "$op" in
+			COPY)   { [ -n "$a" ] && [ -n "$b" ]; } || dr_bad=1 ;;
+			REMOVE) [ -n "$a" ] || dr_bad=1 ;;
+			RENAME) { [ -n "$a" ] && [ -n "$b" ]; } || dr_bad=1 ;;
+			*)      dr_bad=1 ;;
+		esac
+		dr_ops=$((dr_ops + 1))
+	done < "$man"
+	[ "$dr_bad" = 0 ] || die "备份 manifest 已损坏: $man。已中止恢复, 未做任何修改。"
+	[ "$dr_ops" -gt 0 ] || die "备份 manifest 为空: $man。已中止恢复, 未做任何修改。"
+
+	# Pass 2: execute reverse operations.
+	info "恢复最近一次备份: ${last%/}"
+	while IFS='	' read -r op a b; do
+		[ -n "$op" ] || continue
+		case "$op" in
+			COPY)
+				if cp "${last%/}/$a" "$b" 2>/dev/null; then info "  已恢复: $b"; else warn "  恢复失败: $b"; fi ;;
+			REMOVE)
+				if [ -f "$a" ]; then rm -f "$a" && info "  已移除 mirrorsh 生成的文件: $a"; fi ;;
+			RENAME)
+				if mv "$a" "$b" 2>/dev/null; then info "  已还原: $b"; else warn "  还原失败: $b (源 $a 可能已不存在)"; fi ;;
+		esac
+	done < "$man"
+	ok "恢复完成。如仍异常, 备份目录: ${last%/}"
+}
+
+# ---------------------------------------------------------------------------
+# Package manager update + HTTPS->HTTP auto fallback
+# ---------------------------------------------------------------------------
+run_update() {
+	case "$DISTRO" in
+		debian|ubuntu)
+			if have apt-get; then apt-get update
+			elif have apt; then apt update
+			else warn "未找到 apt-get/apt, 跳过 update"; return 0; fi ;;
+		alpine)
+			if have apk; then apk update
+			else warn "未找到 apk, 跳过 update"; return 0; fi ;;
+		openwrt)
+			if have opkg; then opkg update
+			else warn "未找到 opkg, 跳过 update"; return 0; fi ;;
+	esac
+}
+
+tls_error() {
+	printf '%s' "$1" | grep -Eiq 'certificate|SSL|TLS|x509|not yet valid|expired|handshake'
+}
+
+run_update_with_fallback() {
+	info "执行 update..."
+	out=$(run_update 2>&1); st=$?
+	printf '%s\n' "$out"
+
+	if [ "$st" -ne 0 ] && [ "$PROTOCOL" = auto ] && [ "$SCHEME" = https ] && tls_error "$out"; then
+		warn "HTTPS update 失败, 疑似 TLS/证书/系统时间问题, 自动回退 HTTP 重试一次..."
+		SCHEME="http"
+		build_plan
+		write_file "$TARGET_FILE" "$NEW_CONTENT"
+		ok "已回退到 HTTP 源, 重试 update..."
+		out=$(run_update 2>&1); st=$?
+		printf '%s\n' "$out"
+	fi
+
+	if [ "$st" -ne 0 ]; then
+		warn "update 未成功 (这不一定代表换源失败)。"
+		update_fail_hint
+	else
+		ok "update 完成。"
+	fi
+}
+
+update_fail_hint() {
+	cat >&2 <<EOF
+可能原因: DNS 解析失败 / 网络不通 / 镜像站临时异常 / 系统版本已 EOL / 运营商劫持。
+排查建议:
+  - 检查网络与 DNS:        ping / nslookup 镜像站域名
+  - 检查系统时间是否正确:   date
+  - 若提示 404, 系统版本可能已 EOL, 普通镜像无法更新, 需考虑 archive/old-releases (本版本不实现)。
+源文件已修改, 备份目录: $BACKUP_DIR
+如需恢复, 执行:  sh mirrorsh --restore
+EOF
+}
+
+maybe_eol_warn() {
+	case "$DISTRO:$CODENAME" in
+		debian:jessie|debian:stretch|debian:buster|ubuntu:xenial|ubuntu:bionic|ubuntu:trusty)
+			warn "当前系统版本 ($CODENAME) 可能已经 EOL, 普通镜像可能无法更新; 若 apt update 404, 请考虑 archive/old-releases。" ;;
+	esac
+}
+
+# ---------------------------------------------------------------------------
+# check / list
+# ---------------------------------------------------------------------------
+detect_current_mirror() {
+	tf=""
+	case "$DISTRO" in
+		debian|ubuntu) tf="$APT_LIST" ;;
+		alpine)        tf="$APK_REPOS" ;;
+		openwrt)       tf="$OPKG_FEEDS" ;;
+	esac
+	[ -f "$tf" ] || { printf 'unknown'; return; }
+	for m in $MIRRORS_CN; do
+		h=$(resolve_base "$m" "$(repo_key_for_distro)")
+		h=${h%%/*}
+		[ -n "$h" ] || continue
+		if grep -q "$h" "$tf" 2>/dev/null; then printf '%s' "$m"; return; fi
+	done
+	if grep -Eq 'deb.debian.org|archive.ubuntu.com|ports.ubuntu.com|dl-cdn.alpinelinux.org|downloads.openwrt.org' "$tf" 2>/dev/null; then
+		printf 'official'; return
+	fi
+	printf 'unknown/custom'
+}
+
+do_check() {
+	suggested=$(decide_scheme)
+	info "== mirrorsh --check =="
+	say  "distro:            $DISTRO"
+	say  "version:           ${DISTRO_VERSION:-?}"
+	say  "codename:          ${CODENAME:-?}"
+	say  "package manager:   ${PKG_MGR:-?}"
+	say  "cpu architecture:  $ARCH"
+	say  "detected sources:  $(detected_source_files)"
+	say  "suggested protocol: $suggested (--protocol=$PROTOCOL)"
+	say  "current mirror:    $(detect_current_mirror)"
+	maybe_eol_warn
+}
+
+do_list() {
+	info "== 支持的系统 =="
+	say  "  Debian / Ubuntu / Alpine / OpenWrt"
+	say  ""
+	info "== 所有镜像 (国内优先) =="
+	for m in $MIRRORS_CN; do printf '  %-9s %s\n' "$m" "$(mirror_name "$m")"; done
+	for m in $MIRRORS_INTL; do printf '  %-9s %s\n' "$m" "$(mirror_name "$m")"; done
+	say ""
+	if [ -n "$DISTRO" ]; then
+		info "== 当前系统 ($DISTRO / $ARCH) 可用镜像 =="
+		key=$(repo_key_for_distro)
+		for m in $MIRRORS_CN $MIRRORS_INTL; do
+			b=$(resolve_base "$m" "$key")
+			if [ -n "$b" ]; then
+				printf '  %b[可用]%b %-9s %s\n' "$C_GRN" "$C_RST" "$m" "$(mirror_name "$m")"
+			else
+				printf '  %b[不可用]%b %-9s %s\n' "$C_DIM" "$C_RST" "$m" "$(mirror_name "$m")"
+			fi
+		done
+	fi
+}
+
+# ---------------------------------------------------------------------------
+# Interactive menu (reads from /dev/tty so `curl | sh` does not deadlock)
+# ---------------------------------------------------------------------------
+ask_tty() { # prompt default -> sets REPLY; returns nonzero on EOF/read failure
+	printf '%s' "$1" > /dev/tty
+	if IFS= read -r REPLY < /dev/tty; then
+		[ -n "$REPLY" ] || REPLY="$2"
+		return 0
+	fi
+	REPLY="$2"
+	return 1
+}
+
+confirm() { # prompt
+	[ "$YES" = 1 ] && return 0
+	if [ "${MIRRORSH_NO_TTY:-0}" != 1 ] && [ -e /dev/tty ]; then
+		printf '%s [y/N] ' "$1" > /dev/tty
+		IFS= read -r c < /dev/tty || return 1
+		case "$c" in y|Y|yes|YES|Yes) return 0 ;; *) return 1 ;; esac
+	fi
+	die "需要确认但没有可用的 TTY (stdin 非交互)。请加 --yes 或使用 --dry-run。"
+}
+
+run_menu() {
+	info "mirrorsh $VERSION - 交互式菜单"
+	say ""
+	do_check
+	say ""
+
+	key=$(repo_key_for_distro)
+	# build numbered list of available mirrors
+	idx=0
+	menu_list=""
+	info "请选择镜像 (国内优先):"
+	for m in $MIRRORS_CN $MIRRORS_INTL; do
+		b=$(resolve_base "$m" "$key")
+		[ -n "$b" ] || continue
+		idx=$((idx + 1))
+		menu_list="$menu_list $idx:$m"
+		printf '  %2d) %-9s %s\n' "$idx" "$m" "$(mirror_name "$m")"
+	done
+	[ "$idx" -gt 0 ] || die "当前系统没有可用镜像。"
+
+	chosen=""
+	while [ -z "$chosen" ]; do
+		ask_tty "输入序号 [1-$idx]: " "" || die "输入已结束 (EOF), 已退出, 未做任何修改。"
+		for pair in $menu_list; do
+			if [ "${pair%%:*}" = "$REPLY" ]; then chosen="${pair#*:}"; break; fi
+		done
+		[ -z "$chosen" ] && warn "无效输入, 请重试。"
+	done
+	MIRROR="$chosen"
+
+	ask_tty "协议 [auto/http/https] (默认 auto): " "auto"
+	case "$REPLY" in auto|http|https) PROTOCOL="$REPLY" ;; *) warn "无效协议, 使用 auto"; PROTOCOL="auto" ;; esac
+
+	ask_tty "切换后执行 update? [Y/n]: " "y"
+	case "$REPLY" in n|N|no|NO) DO_UPDATE=0 ;; *) DO_UPDATE=1 ;; esac
+
+	say ""
+	do_switch
+}
+
+# ---------------------------------------------------------------------------
+# Switch driver
+# ---------------------------------------------------------------------------
+do_switch() {
+	[ -n "$MIRROR" ] || die "未指定镜像。非交互模式必须使用 --mirror。"
+	mirror_known "$MIRROR" || die "未知镜像: $MIRROR （用 --list 查看可用镜像）"
+
+	SCHEME=$(decide_scheme)
+	debug "scheme=$SCHEME protocol=$PROTOCOL mirror=$MIRROR"
+
+	build_plan
+	print_plan
+	maybe_eol_warn
+
+	if [ "$DRY_RUN" = 1 ]; then
+		info "(dry-run: 未修改任何文件)"
+		return 0
+	fi
+
+	confirm "确认切换到 [$MIRROR] ($SCHEME)?" || { warn "已取消, 未做任何修改。"; return 1; }
+
+	apply_plan
+	ok "软件源已切换到 $MIRROR ($SCHEME)。"
+
+	if [ "$DO_UPDATE" = 1 ]; then
+		run_update_with_fallback
+	else
+		info "已跳过 update (--no-update)。"
+	fi
+
+	say ""
+	info "提示: mirrorsh 不会执行 upgrade/full-upgrade。备份目录: $BACKUP_DIR"
+	info "如需恢复: sh mirrorsh --restore"
+}
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+cleanup_tmp() { [ -n "$MIRRORSH_TMP" ] && rm -f "$MIRRORSH_TMP" 2>/dev/null; return 0; }
+
+main() {
+	# Clean up any half-written temp file on interrupt; never leave partial state.
+	trap 'cleanup_tmp; exit 130' INT TERM
+	trap cleanup_tmp EXIT
+
+	parse_args "$@"
+	setup_colors
+
+	case "$CMD" in
+		help)    show_help; exit 0 ;;
+		version) show_version; exit 0 ;;
+	esac
+
+	# restore needs no system detection beyond paths
+	if [ "$CMD" = "restore" ]; then
+		do_restore
+		exit 0
+	fi
+
+	detect_system
+
+	case "$CMD" in
+		list)   do_list; exit 0 ;;
+		check)  do_check; exit 0 ;;
+		switch) do_switch; exit $? ;;
+		menu)
+			if [ "${MIRRORSH_NO_TTY:-0}" != 1 ] && [ -e /dev/tty ] && [ -r /dev/tty ]; then
+				run_menu
+			else
+				warn "无参数且无可用 /dev/tty, 显示帮助并退出。"
+				show_help
+				exit 0
+			fi
+			;;
+		*) die "内部错误: 未知命令 $CMD" ;;
+	esac
+}
+
+# MIRRORSH_NO_MAIN lets the test suite source this file to unit-test functions.
+[ -n "${MIRRORSH_NO_MAIN:-}" ] || main "$@"

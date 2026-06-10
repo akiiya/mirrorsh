@@ -1,0 +1,5 @@
+NAME="Alpine Linux"
+ID=alpine
+VERSION_ID=3.21.0_alpha20240807
+PRETTY_NAME="Alpine Linux edge"
+HOME_URL="https://alpinelinux.org/"

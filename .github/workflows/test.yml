@@ -1,0 +1,58 @@
+name: test
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+
+# Least privilege: this workflow only reads the repo.
+permissions:
+  contents: read
+
+# Offline, deterministic tests. Never depends on mirror network state and never
+# writes to the host /etc (every test uses a throwaway ROOT_DIR sandbox).
+jobs:
+  posix-test:
+    name: POSIX sh tests (${{ matrix.shell }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shell: [sh, dash]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dash
+        run: sudo apt-get update && sudo apt-get install -y dash
+
+      - name: Syntax check (${{ matrix.shell }} -n)
+        run: |
+          ${{ matrix.shell }} -n mirrorsh
+          ${{ matrix.shell }} -n tests/run-tests.sh
+
+      - name: Run offline test suite
+        id: suite
+        run: |
+          ${{ matrix.shell }} tests/run-tests.sh | tee result.txt
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### mirrorsh tests (${{ matrix.shell }})"
+            echo ""
+            echo '```'
+            tail -n 4 result.txt 2>/dev/null || echo "no result captured"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  shellcheck:
+    name: shellcheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install shellcheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+      - name: Lint (POSIX sh dialect)
+        # shellcheck is a CI-only dependency; end-user devices never need it.
+        run: shellcheck -s sh mirrorsh tests/run-tests.sh

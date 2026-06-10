@@ -1,0 +1,9 @@
+# mirrorsh ships to Linux / BusyBox / embedded devices: everything MUST be LF.
+# CRLF in the script would break the shebang and every line on the target.
+* text=auto eol=lf
+
+# The main script and tests are shell; never let them become CRLF.
+mirrorsh        text eol=lf
+tests/**        text eol=lf
+*.sh            text eol=lf
+*.yml           text eol=lf

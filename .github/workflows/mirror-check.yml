@@ -1,0 +1,106 @@
+name: mirror-check
+
+# Online reachability check for the mirror support matrix.
+# Advisory only: continue-on-error keeps it from ever blocking the repo.
+# Probes MUST stay in sync with resolve_base() in ./mirrorsh and the README table.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 3 * * 1'   # every Monday 03:00 UTC
+
+permissions:
+  contents: read
+
+jobs:
+  reachability:
+    name: probe mirror matrix
+    runs-on: ubuntu-latest
+    continue-on-error: true   # network flakiness / GFW must not fail the repo
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Probe matrix and emit summary
+        shell: bash
+        run: |
+          set -u
+
+          # HEAD first; fall back to a 1-byte ranged GET for servers rejecting HEAD.
+          probe() {
+            url=$1
+            code=$(curl -s -o /dev/null -I -w '%{http_code}' --max-time 25 "$url" 2>/dev/null || echo 000)
+            case "$code" in 200|301|302) return 0 ;; esac
+            code=$(curl -s -o /dev/null -r 0-0 -w '%{http_code}' --max-time 25 "$url" 2>/dev/null || echo 000)
+            case "$code" in 200|206|301|302) return 0 ;; *) return 1 ;; esac
+          }
+
+          host_of() {
+            case "$1" in
+              ustc) echo mirrors.ustc.edu.cn ;;     aliyun) echo mirrors.aliyun.com ;;
+              tencent) echo mirrors.tencent.com ;;  huawei) echo mirrors.huaweicloud.com ;;
+              nju) echo mirrors.nju.edu.cn ;;       sjtu) echo mirror.sjtu.edu.cn ;;
+              bfsu) echo mirrors.bfsu.edu.cn ;;      sustech) echo mirrors.sustech.edu.cn ;;
+              zju) echo mirrors.zju.edu.cn ;;        lzu) echo mirror.lzu.edu.cn ;;
+              163) echo mirrors.163.com ;;
+            esac
+          }
+
+          # probe_url <mirror> <repo> -> representative URL, or empty if NOT enabled
+          probe_url() {
+            m=$1; r=$2
+            if [ "$m" = official ]; then
+              case "$r" in
+                debian)       echo "https://deb.debian.org/debian/dists/bookworm/Release" ;;
+                ubuntu)       echo "https://archive.ubuntu.com/ubuntu/dists/noble/Release" ;;
+                ubuntu-ports) echo "https://ports.ubuntu.com/ubuntu-ports/dists/noble/Release" ;;
+                alpine)       echo "https://dl-cdn.alpinelinux.org/alpine/v3.19/main/x86_64/APKINDEX.tar.gz" ;;
+                openwrt)      echo "https://downloads.openwrt.org/releases/23.05.5/packages/mipsel_24kc/base/Packages" ;;
+              esac
+              return
+            fi
+            h=$(host_of "$m"); [ -n "$h" ] || return
+            case "$r" in
+              debian)       echo "https://$h/debian/dists/bookworm/Release" ;;
+              ubuntu)       echo "https://$h/ubuntu/dists/noble/Release" ;;
+              ubuntu-ports) [ "$m" = 163 ] || echo "https://$h/ubuntu-ports/dists/noble/Release" ;;
+              alpine)       echo "https://$h/alpine/v3.19/main/x86_64/APKINDEX.tar.gz" ;;
+              openwrt)      case "$m" in
+                              ustc|aliyun|tencent|huawei|nju|sjtu|bfsu|sustech)
+                                echo "https://$h/openwrt/releases/23.05.5/packages/mipsel_24kc/base/Packages" ;;
+                            esac ;;
+            esac
+          }
+
+          MIRRORS="ustc aliyun tencent huawei nju sjtu bfsu sustech 163 zju lzu official"
+          REPOS="debian ubuntu ubuntu-ports alpine openwrt"
+
+          {
+            echo "## mirror-check matrix"
+            echo ""
+            echo "Legend: ✅ reachable · ❌ enabled-but-unreachable · — not enabled"
+            echo ""
+            echo "| mirror | debian | ubuntu | ubuntu-ports | alpine | openwrt | notes |"
+            echo "|--------|:------:|:------:|:------------:|:------:|:-------:|-------|"
+          } > matrix.md
+
+          fails=0
+          for m in $MIRRORS; do
+            row="| \`$m\` |"
+            notes=""
+            for r in $REPOS; do
+              u=$(probe_url "$m" "$r")
+              if [ -z "$u" ]; then row="$row — |"; continue; fi
+              if probe "$u"; then
+                row="$row ✅ |"
+              else
+                row="$row ❌ |"; notes="$notes $r"; fails=$((fails + 1))
+              fi
+            done
+            [ -n "$notes" ] && notes="unreachable:$notes"
+            echo "$row $notes |" >> matrix.md
+          done
+
+          echo "" >> matrix.md
+          echo "Total unreachable enabled cells: **$fails** (advisory; transient failures from GitHub runners are expected)." >> matrix.md
+
+          cat matrix.md
+          cat matrix.md >> "$GITHUB_STEP_SUMMARY"

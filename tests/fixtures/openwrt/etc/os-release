@@ -1,0 +1,7 @@
+NAME="OpenWrt"
+VERSION="23.05.5"
+ID="openwrt"
+ID_LIKE="lede openwrt"
+PRETTY_NAME="OpenWrt 23.05.5"
+VERSION_ID="23.05.5"
+HOME_URL="https://openwrt.org/"
