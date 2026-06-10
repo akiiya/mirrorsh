@@ -10,7 +10,7 @@
 #
 # License: MIT
 
-VERSION="v0.1.0"
+VERSION="v0.1.0-rc1"
 
 # ---------------------------------------------------------------------------
 # Path overrides (production defaults to /etc; tests inject ROOT_DIR/ETC_DIR)
@@ -296,9 +296,9 @@ detected_source_files() {
 #
 # Only combinations the maintainer is confident about are enabled. Unverified
 # foreign mirrors are intentionally deferred (see README) — never emit a URL we
-# cannot stand behind.
+# cannot stand behind. No mirror is a "default": the user always chooses.
 # ---------------------------------------------------------------------------
-MIRRORS_CN="ustc aliyun tencent huawei nju sjtu 163 bfsu zju sustech lzu"
+MIRRORS_CN="ustc tuna aliyun tencent huawei nju sjtu 163 bfsu zju sustech lzu"
 MIRRORS_INTL="official"
 
 mirror_known() {
@@ -311,6 +311,7 @@ mirror_known() {
 mirror_name() {
 	case "$1" in
 		ustc)    printf '中科大 USTC' ;;
+		tuna)    printf '清华 TUNA' ;;
 		aliyun)  printf '阿里云 Aliyun' ;;
 		tencent) printf '腾讯云 Tencent' ;;
 		huawei)  printf '华为云 Huawei' ;;
@@ -341,6 +342,7 @@ resolve_base() {
 	if [ "$rb_m" = official ]; then resolve_official "$rb_d"; return; fi
 	case "$rb_m" in
 		ustc)    rb_h=mirrors.ustc.edu.cn ;;
+		tuna)    rb_h=mirrors.tuna.tsinghua.edu.cn ;;
 		aliyun)  rb_h=mirrors.aliyun.com ;;
 		tencent) rb_h=mirrors.tencent.com ;;
 		huawei)  rb_h=mirrors.huaweicloud.com ;;
@@ -364,7 +366,7 @@ resolve_base() {
 		alpine) printf '%s' "$rb_h/alpine" ;;
 		openwrt)
 			case "$rb_m" in
-				ustc|aliyun|tencent|huawei|nju|sjtu|bfsu|sustech)
+				ustc|tuna|aliyun|tencent|huawei|nju|sjtu|bfsu|sustech)
 					printf '%s' "$rb_h/openwrt" ;;
 				*) : ;;                          # 163/zju/lzu not enabled for openwrt
 			esac ;;
@@ -392,6 +394,7 @@ known_openwrt_bases() {
 	cat <<'EOF'
 downloads.openwrt.org
 mirrors.ustc.edu.cn/openwrt
+mirrors.tuna.tsinghua.edu.cn/openwrt
 mirrors.aliyun.com/openwrt
 mirrors.tencent.com/openwrt
 mirrors.huaweicloud.com/openwrt
@@ -903,6 +906,19 @@ confirm() { # prompt
 	die "需要确认但没有可用的 TTY (stdin 非交互)。请加 --yes 或使用 --dry-run。"
 }
 
+# resolve_menu_choice <input> <pair...>  where each pair is "<idx>:<mirror>"
+# Echoes the chosen mirror name, or "invalid" (empty input is invalid too).
+resolve_menu_choice() {
+	rmc_in=$1
+	shift
+	[ -n "$rmc_in" ] || { printf 'invalid'; return 1; }
+	for rmc_p in "$@"; do
+		if [ "${rmc_p%%:*}" = "$rmc_in" ]; then printf '%s' "${rmc_p#*:}"; return 0; fi
+	done
+	printf 'invalid'
+	return 1
+}
+
 run_menu() {
 	info "mirrorsh $VERSION - 交互式菜单"
 	say ""
@@ -926,10 +942,10 @@ run_menu() {
 	chosen=""
 	while [ -z "$chosen" ]; do
 		ask_tty "输入序号 [1-$idx]: " "" || die "输入已结束 (EOF), 已退出, 未做任何修改。"
-		for pair in $menu_list; do
-			if [ "${pair%%:*}" = "$REPLY" ]; then chosen="${pair#*:}"; break; fi
-		done
-		[ -z "$chosen" ] && warn "无效输入, 请重试。"
+		# word-splitting of $menu_list is intentional (each "idx:mirror" is one arg)
+		# shellcheck disable=SC2086
+		chosen=$(resolve_menu_choice "$REPLY" $menu_list)
+		[ "$chosen" = invalid ] && { warn "无效输入, 请重试。"; chosen=""; }
 	done
 	MIRROR="$chosen"
 

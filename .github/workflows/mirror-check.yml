@@ -35,7 +35,8 @@ jobs:
 
           host_of() {
             case "$1" in
-              ustc) echo mirrors.ustc.edu.cn ;;     aliyun) echo mirrors.aliyun.com ;;
+              ustc) echo mirrors.ustc.edu.cn ;;     tuna) echo mirrors.tuna.tsinghua.edu.cn ;;
+              aliyun) echo mirrors.aliyun.com ;;
               tencent) echo mirrors.tencent.com ;;  huawei) echo mirrors.huaweicloud.com ;;
               nju) echo mirrors.nju.edu.cn ;;       sjtu) echo mirror.sjtu.edu.cn ;;
               bfsu) echo mirrors.bfsu.edu.cn ;;      sustech) echo mirrors.sustech.edu.cn ;;
@@ -64,13 +65,13 @@ jobs:
               ubuntu-ports) [ "$m" = 163 ] || echo "https://$h/ubuntu-ports/dists/noble/Release" ;;
               alpine)       echo "https://$h/alpine/v3.19/main/x86_64/APKINDEX.tar.gz" ;;
               openwrt)      case "$m" in
-                              ustc|aliyun|tencent|huawei|nju|sjtu|bfsu|sustech)
+                              ustc|tuna|aliyun|tencent|huawei|nju|sjtu|bfsu|sustech)
                                 echo "https://$h/openwrt/releases/23.05.5/packages/mipsel_24kc/base/Packages" ;;
                             esac ;;
             esac
           }
 
-          MIRRORS="ustc aliyun tencent huawei nju sjtu bfsu sustech 163 zju lzu official"
+          MIRRORS="ustc tuna aliyun tencent huawei nju sjtu bfsu sustech 163 zju lzu official"
           REPOS="debian ubuntu ubuntu-ports alpine openwrt"
 
           {

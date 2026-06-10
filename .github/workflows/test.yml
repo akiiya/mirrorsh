@@ -9,11 +9,11 @@ on:
 permissions:
   contents: read
 
-# Offline, deterministic tests. Never depends on mirror network state and never
-# writes to the host /etc (every test uses a throwaway ROOT_DIR sandbox).
+# Every job is OFFLINE and never writes to the host /etc (tests use throwaway
+# ROOT_DIR sandboxes under /tmp). The Alpine job mounts only the repo, read-only.
 jobs:
   posix-test:
-    name: POSIX sh tests (${{ matrix.shell }})
+    name: POSIX tests (${{ matrix.shell }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -25,26 +25,70 @@ jobs:
       - name: Install dash
         run: sudo apt-get update && sudo apt-get install -y dash
 
-      - name: Syntax check (${{ matrix.shell }} -n)
+      - name: Shell syntax check
+        id: syntax
         run: |
           ${{ matrix.shell }} -n mirrorsh
           ${{ matrix.shell }} -n tests/run-tests.sh
+          ${{ matrix.shell }} -n tests/preflight.sh
 
-      - name: Run offline test suite
-        id: suite
-        run: |
-          ${{ matrix.shell }} tests/run-tests.sh | tee result.txt
+      - name: Offline test suite
+        id: tests
+        run: ${{ matrix.shell }} tests/run-tests.sh
 
       - name: Summary
         if: always()
         run: |
+          map() { case "$1" in success) echo pass ;; failure) echo fail ;; *) echo "$1" ;; esac; }
           {
-            echo "### mirrorsh tests (${{ matrix.shell }})"
-            echo ""
-            echo '```'
-            tail -n 4 result.txt 2>/dev/null || echo "no result captured"
-            echo '```'
+            echo "- shell syntax (${{ matrix.shell }}): $(map '${{ steps.syntax.outcome }}')"
+            echo "- ${{ matrix.shell }} tests: $(map '${{ steps.tests.outcome }}')"
           } >> "$GITHUB_STEP_SUMMARY"
+
+  busybox-test:
+    name: BusyBox sh tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run under busybox sh (skip if unavailable)
+        id: bb
+        run: |
+          if ! sudo apt-get update || ! sudo apt-get install -y busybox; then
+            echo "busybox unavailable -> skipped"; echo "status=skipped" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          if command -v busybox >/dev/null 2>&1; then
+            busybox sh tests/run-tests.sh
+            echo "status=pass" >> "$GITHUB_OUTPUT"
+          else
+            echo "busybox not on PATH -> skipped"; echo "status=skipped" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Summary
+        if: always()
+        run: |
+          st='${{ steps.bb.outputs.status }}'
+          [ -n "$st" ] || st='fail'
+          echo "- busybox sh tests: $st" >> "$GITHUB_STEP_SUMMARY"
+
+  alpine-test:
+    name: Alpine (BusyBox ash) container tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run inside Alpine container (repo mounted read-only)
+        id: alp
+        run: |
+          if ! docker pull -q alpine:3.19 >/dev/null 2>&1; then
+            echo "alpine image unavailable -> skipped"; echo "status=skipped" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          # Alpine /bin/sh IS BusyBox ash. Mount ONLY the repo, read-only.
+          docker run --rm -v "$PWD":/work:ro -w /work alpine:3.19 sh tests/run-tests.sh
+          echo "status=pass" >> "$GITHUB_OUTPUT"
+      - name: Summary
+        if: always()
+        run: |
+          st='${{ steps.alp.outputs.status }}'
+          [ -n "$st" ] || st='fail'
+          echo "- alpine container tests: $st" >> "$GITHUB_STEP_SUMMARY"
 
   shellcheck:
     name: shellcheck
@@ -54,5 +98,11 @@ jobs:
       - name: Install shellcheck
         run: sudo apt-get update && sudo apt-get install -y shellcheck
       - name: Lint (POSIX sh dialect)
+        id: sc
         # shellcheck is a CI-only dependency; end-user devices never need it.
-        run: shellcheck -s sh mirrorsh tests/run-tests.sh
+        run: shellcheck -s sh mirrorsh tests/run-tests.sh tests/preflight.sh
+      - name: Summary
+        if: always()
+        run: |
+          map() { case "$1" in success) echo pass ;; failure) echo fail ;; *) echo "$1" ;; esac; }
+          echo "- shellcheck: $(map '${{ steps.sc.outcome }}')" >> "$GITHUB_STEP_SUMMARY"
