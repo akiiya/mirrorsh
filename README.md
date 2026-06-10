@@ -9,7 +9,7 @@
 它不是守护进程，没有安装器，没有后台服务，没有花哨 UI。它就是一个可以直接执行的一键脚本。
 
 ```sh
-sh mirrorsh --mirror ustc --yes
+sh mirror.sh --mirror ustc --yes
 ```
 
 > **mirrorsh 不安装、不常驻、不升级系统。** 它只切换软件源并执行 `update`，**绝不**执行 `upgrade` / `full-upgrade`。脚本跑完即退出，不留任何后台进程，不修改 init/systemd，不自我更新。
@@ -36,7 +36,7 @@ sh mirrorsh --mirror ustc --yes
 
 ## 设计目标
 
-1. **单文件**：主脚本就叫 `mirrorsh`（不是 `mirrorsh.sh`），可直接 `curl | sh` 或 `scp` 到设备执行。
+1. **单文件**：主脚本是单个 `mirror.sh`（项目名 `mirrorsh`），可直接 `curl | sh` 或 `scp` 到设备执行。
 2. **POSIX sh**：不依赖 bash 专属语法，兼容 BusyBox / ash / dash。
 3. **无运行时依赖**：不依赖 Python / Perl / jq / Node.js / Go / Rust，甚至不强依赖 awk。
 4. **小设备友好**：任何可选命令（curl/wget/mktemp/sort…）使用前都先检测是否存在，并有 fallback。
@@ -132,36 +132,36 @@ OpenWrt 的 `distfeeds.conf` 里的路径包含 target / subtarget / arch（如 
 ### curl 一键运行
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/<owner>/mirrorsh/main/mirrorsh | sh -s -- --mirror ustc --yes
+curl -fsSL https://raw.githubusercontent.com/akiiya/mirrorsh/main/mirror.sh | sh -s -- --mirror ustc --yes
 ```
 
 ### wget 一键运行
 
 ```sh
-wget -O- https://raw.githubusercontent.com/<owner>/mirrorsh/main/mirrorsh | sh -s -- --mirror ustc --yes
+wget -O- https://raw.githubusercontent.com/akiiya/mirrorsh/main/mirror.sh | sh -s -- --mirror ustc --yes
 ```
 
 > 通过管道执行时（`curl | sh`），交互菜单会从 `/dev/tty` 读取输入，不会因 stdin 被占用而卡死。若没有 `/dev/tty` 且未带参数，会显示帮助并退出。
 
-> ⚠️ **GitHub raw 本身就是 HTTPS。** 如果设备的 HTTPS 已经坏掉（没有 CA 证书、系统时间不准），那么 `curl`/`wget` 连 `raw.githubusercontent.com` 都会失败——这时**先在电脑上下载 `mirrorsh`，再用下面的 scp 方式拷进设备**，比在设备上硬连 GitHub 更可靠。
+> ⚠️ **GitHub raw 本身就是 HTTPS。** 如果设备的 HTTPS 已经坏掉（没有 CA 证书、系统时间不准），那么 `curl`/`wget` 连 `raw.githubusercontent.com` 都会失败——这时**先在电脑上下载 `mirror.sh`，再用下面的 scp 方式拷进设备**，比在设备上硬连 GitHub 更可靠。
 
 ### 手动下载 / scp 到随身 WiFi、软路由（离线/无 curl 环境推荐）
 
 ```sh
-scp mirrorsh root@192.168.8.1:/tmp/mirrorsh
-ssh root@192.168.8.1 'sh /tmp/mirrorsh --mirror ustc --yes'
+scp mirror.sh root@192.168.8.1:/tmp/mirror.sh
+ssh root@192.168.8.1 'sh /tmp/mirror.sh --mirror ustc --yes'
 ```
 
 ### 典型用法
 
 ```sh
-sh mirrorsh --check                       # 只检测系统, 不改任何东西
-sh mirrorsh --list                        # 看支持哪些镜像
-sh mirrorsh --mirror ustc --dry-run       # 预览将写入的内容
-sh mirrorsh --mirror aliyun --yes         # 切到阿里云并 apt update
-sh mirrorsh --mirror official --yes       # 切回官方源
-sh mirrorsh --mirror ustc --protocol http --yes   # 强制 HTTP
-sh mirrorsh --restore                     # 恢复最近一次备份
+sh mirror.sh --check                       # 只检测系统, 不改任何东西
+sh mirror.sh --list                        # 看支持哪些镜像
+sh mirror.sh --mirror ustc --dry-run       # 预览将写入的内容
+sh mirror.sh --mirror aliyun --yes         # 切到阿里云并 apt update
+sh mirror.sh --mirror official --yes       # 切回官方源
+sh mirror.sh --mirror ustc --protocol http --yes   # 强制 HTTP
+sh mirror.sh --restore                     # 恢复最近一次备份
 ```
 
 ---
@@ -191,7 +191,7 @@ sh mirrorsh --restore                     # 恢复最近一次备份
 ### `--check` 示例
 
 ```
-$ sh mirrorsh --check
+$ sh mirror.sh --check
 == mirrorsh --check ==
 distro:            debian
 version:           12
@@ -206,7 +206,7 @@ current mirror:    official
 ### `--list` 示例
 
 ```
-$ sh mirrorsh --list
+$ sh mirror.sh --list
 == 当前系统 (debian / amd64) 可用镜像 ==
   [可用] ustc      中科大 USTC
   [可用] aliyun    阿里云 Aliyun
@@ -216,7 +216,7 @@ $ sh mirrorsh --list
 ### `--dry-run` 示例
 
 ```
-$ sh mirrorsh --mirror ustc --dry-run
+$ sh mirror.sh --mirror ustc --dry-run
 == 将要修改的文件 ==
   禁用并备份: /etc/apt/sources.list.d/debian.sources -> ...mirrorsh.bak.<ts>
   写入: /etc/apt/sources.list
@@ -231,16 +231,16 @@ $ sh mirrorsh --mirror ustc --dry-run
 逐步加大动作，每一步都能随时停下：
 
 ```sh
-sh mirrorsh --check                  # 1. 只看检测结果, 零风险
-sh mirrorsh --mirror ustc --dry-run  # 2. 预览将写入的内容, 仍不改文件
-sh mirrorsh --mirror ustc --yes --no-update   # 3. 换源但先不联网 update
-sh mirrorsh --mirror ustc --yes      # 4. 确认网络 OK 后再带 update
+sh mirror.sh --check                  # 1. 只看检测结果, 零风险
+sh mirror.sh --mirror ustc --dry-run  # 2. 预览将写入的内容, 仍不改文件
+sh mirror.sh --mirror ustc --yes --no-update   # 3. 换源但先不联网 update
+sh mirror.sh --mirror ustc --yes      # 4. 确认网络 OK 后再带 update
 ```
 
 ### 切换后网络坏了怎么办
 
 ```sh
-sh mirrorsh --restore                # 一键回到切换前的源
+sh mirror.sh --restore                # 一键回到切换前的源
 ```
 
 ---
@@ -250,19 +250,19 @@ sh mirrorsh --restore                # 一键回到切换前的源
 适合随身 WiFi / 软路由用户的最小验证流程（每一步都能停下并 `--restore`）：
 
 ```sh
-sh mirrorsh --check
-sh mirrorsh --mirror ustc --dry-run
-sh mirrorsh --mirror ustc --yes --no-update
+sh mirror.sh --check
+sh mirror.sh --mirror ustc --dry-run
+sh mirror.sh --mirror ustc --yes --no-update
 cat /etc/apt/sources.list 2>/dev/null || true
 cat /etc/apk/repositories 2>/dev/null || true
 cat /etc/opkg/distfeeds.conf 2>/dev/null || true
-sh mirrorsh --restore
+sh mirror.sh --restore
 ```
 
 想试清华 TUNA（先预览，不写文件）：
 
 ```sh
-sh mirrorsh --mirror tuna --dry-run
+sh mirror.sh --mirror tuna --dry-run
 ```
 
 > ⚠️ **远程 SSH 连接设备时，第一次测试建议带 `--no-update`**：避免联网 `update` 过程卡住，让你误以为脚本失败。确认文件改对、`--restore` 能还原之后，再去掉 `--no-update`。
@@ -274,7 +274,7 @@ sh mirrorsh --mirror tuna --dry-run
 直接执行（不带参数）进入交互菜单：
 
 ```sh
-sh mirrorsh
+sh mirror.sh
 ```
 
 流程：检测系统 → 显示系统信息 → 列出当前系统可用镜像（国内优先）→ 选择镜像 → 选择协议（默认 auto）→ 是否 update（默认 yes）→ 展示将修改的文件 → 最终确认。
@@ -298,7 +298,7 @@ sh mirrorsh
 恢复最近一次备份：
 
 ```sh
-sh mirrorsh --restore
+sh mirror.sh --restore
 ```
 
 `--restore` 只还原 mirrorsh 改动过的源相关文件：把备份的原文件拷回、把被禁用的 `.sources` 改名还原、并移除 mirrorsh 新生成的 `sources.list`（若它原本不存在）。
@@ -347,8 +347,8 @@ mirrorsh 只负责切换软件源并执行 update，不会执行 upgrade/full-up
 | Alpine `repository not found` | 确认分支（v3.19 / edge）正确；`apk update` 后再试。 |
 | Ubuntu ports 架构源错误 | 非 amd64/i386 必须用 `/ubuntu-ports`；`mirrorsh` 已按架构自动选择。 |
 | Debian/Ubuntu EOL 版本 | 普通镜像没有该版本；本版本不实现 archive，请自行处理。 |
-| GitHub raw 无法访问 | 用 `scp`/`wget` 离线方式把 `mirrorsh` 拷到设备执行。 |
-| curl/wget 不存在 | 用 `scp mirrorsh root@设备:/tmp/` 后 `sh /tmp/mirrorsh`。 |
+| GitHub raw 无法访问 | 用 `scp`/`wget` 离线方式把 `mirror.sh` 拷到设备执行。 |
+| curl/wget 不存在 | 用 `scp mirror.sh root@设备:/tmp/` 后 `sh /tmp/mirror.sh`。 |
 
 ---
 
@@ -375,7 +375,7 @@ sh tests/preflight.sh
 测试通过环境变量把 mirrorsh 重定向到沙箱，绝不动真实系统：
 
 ```sh
-ROOT_DIR=/tmp/test-root sh mirrorsh --mirror ustc --yes --no-update
+ROOT_DIR=/tmp/test-root sh mirror.sh --mirror ustc --yes --no-update
 ```
 
 | 变量 | 作用 |
@@ -390,7 +390,7 @@ ROOT_DIR=/tmp/test-root sh mirrorsh --mirror ustc --yes --no-update
 
 ### GitHub Actions
 
-- `.github/workflows/test.yml`：push / PR 时运行（权限 `contents: read`，全部离线、不写宿主 `/etc`），含：`sh` 与 `dash` 的 `-n` 语法检查 + 离线测试；**BusyBox sh** 测试（runner 不可用则 skipped）；**Alpine 容器**测试（Alpine 的 `/bin/sh` 即 BusyBox ash，仅只读挂载仓库目录）；`shellcheck -s sh mirrorsh tests/run-tests.sh tests/preflight.sh`（shellcheck 仅 CI 依赖，用户设备无需安装）。每个 job 都把 `pass/fail/skipped` 写入 Job Summary。
+- `.github/workflows/test.yml`：push / PR 时运行（权限 `contents: read`，全部离线、不写宿主 `/etc`），含：`sh` 与 `dash` 的 `-n` 语法检查 + 离线测试；**BusyBox sh** 测试（runner 不可用则 skipped）；**Alpine 容器**测试（Alpine 的 `/bin/sh` 即 BusyBox ash，仅只读挂载仓库目录）；`shellcheck -s sh mirror.sh tests/run-tests.sh tests/preflight.sh`（shellcheck 仅 CI 依赖，用户设备无需安装）。每个 job 都把 `pass/fail/skipped` 写入 Job Summary。
 - `.github/workflows/mirror-check.yml`：**仅** `workflow_dispatch` 或每周定时触发的**健康检查**，在线探测**所有已启用**镜像组合（含 TUNA）的可达性（HEAD，失败回退小 GET），在 Job Summary 输出 Markdown 矩阵。`continue-on-error: true`，**绝不阻塞**主 CI——它失败只代表某镜像站当时不可达，**不代表主测试失败或脚本有问题**。该矩阵与代码 `resolve_base()`、本 README 表格三方保持一致。
 
 ---
@@ -407,11 +407,11 @@ ROOT_DIR=/tmp/test-root sh mirrorsh --mirror ustc --yes --no-update
 3. 手动运行一次 `mirror-check.yml`，确认没有大面积 ❌（个别站点临时不可达可接受）。**因为本轮加入了 TUNA，务必确认 TUNA 那一行 5 个组合没有明显路径错误。**
 4. 在真实小设备上至少执行：
    ```sh
-   sh mirrorsh --check
-   sh mirrorsh --list
-   sh mirrorsh --mirror ustc --dry-run
-   sh mirrorsh --mirror ustc --yes --no-update
-   sh mirrorsh --restore
+   sh mirror.sh --check
+   sh mirror.sh --list
+   sh mirror.sh --mirror ustc --dry-run
+   sh mirror.sh --mirror ustc --yes --no-update
+   sh mirror.sh --restore
    ```
 5. 随身 WiFi / OpenWrt 上先用 `--no-update` 验证文件修改与 `--restore`，确认无误再联网 update。
 6. 打发布候选 tag：

@@ -1,6 +1,6 @@
 #!/bin/sh
 # mirrorsh - tiny POSIX sh mirror switcher for Linux and embedded devices
-# https://github.com/<owner>/mirrorsh
+# https://github.com/akiiya/mirrorsh
 #
 # 一个轻量、无依赖、适合 Linux 小设备的软件源切换脚本。
 # 第一版支持: Debian / Ubuntu / Alpine / OpenWrt
@@ -103,8 +103,8 @@ mirrorsh $VERSION - tiny POSIX sh mirror switcher
 轻量、无依赖、适合 Linux 小设备的软件源切换脚本
 
 用法:
-  sh mirrorsh                      进入交互式菜单 (需要 /dev/tty)
-  sh mirrorsh [选项]
+  sh mirror.sh                      进入交互式菜单 (需要 /dev/tty)
+  sh mirror.sh [选项]
 
 选项:
   --help                显示本帮助
@@ -121,13 +121,13 @@ mirrorsh $VERSION - tiny POSIX sh mirror switcher
   --no-color            禁用彩色输出
 
 典型用法:
-  sh mirrorsh --check
-  sh mirrorsh --list
-  sh mirrorsh --mirror ustc --dry-run
-  sh mirrorsh --mirror aliyun --yes
-  sh mirrorsh --mirror official --yes
-  sh mirrorsh --mirror ustc --protocol http --yes
-  sh mirrorsh --restore
+  sh mirror.sh --check
+  sh mirror.sh --list
+  sh mirror.sh --mirror ustc --dry-run
+  sh mirror.sh --mirror aliyun --yes
+  sh mirror.sh --mirror official --yes
+  sh mirror.sh --mirror ustc --protocol http --yes
+  sh mirror.sh --restore
 
 第一版支持: Debian / Ubuntu / Alpine / OpenWrt
 mirrorsh 只切换软件源并执行 update, 不会执行 upgrade/full-upgrade。
@@ -813,7 +813,7 @@ update_fail_hint() {
   - 检查系统时间是否正确:   date
   - 若提示 404, 系统版本可能已 EOL, 普通镜像无法更新, 需考虑 archive/old-releases (本版本不实现)。
 源文件已修改, 备份目录: $BACKUP_DIR
-如需恢复, 执行:  sh mirrorsh --restore
+如需恢复, 执行:  sh mirror.sh --restore
 EOF
 }
 
@@ -991,7 +991,7 @@ do_switch() {
 
 	say ""
 	info "提示: mirrorsh 不会执行 upgrade/full-upgrade。备份目录: $BACKUP_DIR"
-	info "如需恢复: sh mirrorsh --restore"
+	info "如需恢复: sh mirror.sh --restore"
 }
 
 # ---------------------------------------------------------------------------

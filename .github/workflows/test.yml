@@ -28,7 +28,7 @@ jobs:
       - name: Shell syntax check
         id: syntax
         run: |
-          ${{ matrix.shell }} -n mirrorsh
+          ${{ matrix.shell }} -n mirror.sh
           ${{ matrix.shell }} -n tests/run-tests.sh
           ${{ matrix.shell }} -n tests/preflight.sh
 
@@ -100,7 +100,7 @@ jobs:
       - name: Lint (POSIX sh dialect)
         id: sc
         # shellcheck is a CI-only dependency; end-user devices never need it.
-        run: shellcheck -s sh mirrorsh tests/run-tests.sh tests/preflight.sh
+        run: shellcheck -s sh mirror.sh tests/run-tests.sh tests/preflight.sh
       - name: Summary
         if: always()
         run: |

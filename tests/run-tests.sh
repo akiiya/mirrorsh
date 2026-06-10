@@ -9,8 +9,8 @@
 #   MIRRORSH_BACKUP_DIR=<dir> override the primary backup root
 #   MIRRORSH_NO_MAIN=1        source the script without running, to unit-test fns
 
-# Test-harness shellcheck exemptions (not applicable to ./mirrorsh itself):
-#   SC1090 - we source ./mirrorsh dynamically via "$SCRIPT" on purpose
+# Test-harness shellcheck exemptions (not applicable to ./mirror.sh itself):
+#   SC1090 - we source ./mirror.sh dynamically via "$SCRIPT" on purpose
 #   SC2034 - CODENAME/MIRROR/... are read by the sourced functions, not here
 #   SC2329 - run_update/timestamp/system_year stubs are invoked indirectly
 # shellcheck disable=SC1090,SC2034,SC2329
@@ -19,9 +19,9 @@ set -u
 unset CDPATH 2>/dev/null || true
 TESTS_DIR=$(cd -- "$(dirname -- "$0")" && pwd)
 REPO_DIR=$(cd -- "$TESTS_DIR/.." && pwd)
-SCRIPT="$REPO_DIR/mirrorsh"
+SCRIPT="$REPO_DIR/mirror.sh"
 FIX="$TESTS_DIR/fixtures"
-[ -f "$SCRIPT" ] || { echo "找不到 mirrorsh: $SCRIPT" >&2; exit 1; }
+[ -f "$SCRIPT" ] || { echo "找不到 mirror.sh: $SCRIPT" >&2; exit 1; }
 
 PASS=0
 FAIL=0
@@ -348,7 +348,7 @@ assert_no_file "$R/etc/apt/sources.list" "VII.3 无参数无 tty 不修改文件
 
 R=$(new_root debian-bookworm)
 EXIT=0; OUT=$(printf 'garbage\n' | ROOT_DIR="$R" MIRRORSH_FAKE_ARCH=x86_64 MIRRORSH_NO_TTY=1 sh "$SCRIPT") || EXIT=$?
-assert_str_contains "$OUT" "用法:" "VII.4 cat mirrorsh | sh 不卡住, 显示帮助"
+assert_str_contains "$OUT" "用法:" "VII.4 cat mirror.sh | sh 不卡住, 显示帮助"
 
 # VII.7: 未 --yes 且非 dry-run 且无 tty -> 报错, 确认前不写文件
 R=$(new_root debian-bookworm)

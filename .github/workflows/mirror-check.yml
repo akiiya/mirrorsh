@@ -2,7 +2,7 @@ name: mirror-check
 
 # Online reachability check for the mirror support matrix.
 # Advisory only: continue-on-error keeps it from ever blocking the repo.
-# Probes MUST stay in sync with resolve_base() in ./mirrorsh and the README table.
+# Probes MUST stay in sync with resolve_base() in ./mirror.sh and the README table.
 on:
   workflow_dispatch:
   schedule:
