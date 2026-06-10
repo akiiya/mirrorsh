@@ -363,12 +363,16 @@ resolve_base() {
 				163) : ;;                        # 163 has no ubuntu-ports
 				*)   printf '%s' "$rb_h/ubuntu-ports" ;;
 			esac ;;
-		alpine) printf '%s' "$rb_h/alpine" ;;
+		alpine)
+			case "$rb_m" in
+				163|sustech) : ;;                # 163/sustech 不提供 alpine 镜像 (确认 404)
+				*) printf '%s' "$rb_h/alpine" ;;
+			esac ;;
 		openwrt)
 			case "$rb_m" in
-				ustc|tuna|aliyun|tencent|huawei|nju|sjtu|bfsu|sustech)
+				ustc|tuna|aliyun|huawei|nju|sjtu|bfsu|sustech)
 					printf '%s' "$rb_h/openwrt" ;;
-				*) : ;;                          # 163/zju/lzu not enabled for openwrt
+				*) : ;;                          # tencent/163/zju/lzu 未启用 openwrt
 			esac ;;
 	esac
 }
@@ -396,7 +400,6 @@ downloads.openwrt.org
 mirrors.ustc.edu.cn/openwrt
 mirrors.tuna.tsinghua.edu.cn/openwrt
 mirrors.aliyun.com/openwrt
-mirrors.tencent.com/openwrt
 mirrors.huaweicloud.com/openwrt
 mirrors.nju.edu.cn/openwrt
 mirror.sjtu.edu.cn/openwrt

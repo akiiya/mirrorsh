@@ -67,18 +67,20 @@ sh mirror.sh --mirror ustc --yes
 | `ustc`    | 中科大        | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `tuna`    | 清华 TUNA     | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `aliyun`  | 阿里云        | ✅ | ✅ | ✅ | ✅ | ✅ |
-| `tencent` | 腾讯云        | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `huawei`  | 华为云        | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `nju`     | 南京大学      | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `sjtu`    | 上海交大      | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `bfsu`    | 北京外国语    | ✅ | ✅ | ✅ | ✅ | ✅ |
-| `sustech` | 南方科技大学  | ✅ | ✅ | ✅ | ✅ | ✅ |
-| `163`     | 网易 163      | ✅ | ✅ | ❌ | ✅ | ❌ |
+| `tencent` | 腾讯云        | ✅ | ✅ | ✅ | ✅ | ❌ |
+| `sustech` | 南方科技大学  | ✅ | ✅ | ✅ | ❌ | ✅ |
 | `zju`     | 浙江大学      | ✅ | ✅ | ✅ | ✅ | ❌ |
 | `lzu`     | 兰州大学      | ✅ | ✅ | ✅ | ✅ | ❌ |
+| `163`     | 网易 163      | ✅ | ✅ | ❌ | ❌ | ❌ |
 | `official`| 官方源        | ✅ | ✅ | ✅ | ✅ | ✅ |
 
 `official` 使用全球 CDN（`deb.debian.org`、`archive/ports.ubuntu.com`、`dl-cdn.alpinelinux.org`、`downloads.openwrt.org`），是最可靠的海外/兜底选项。
+
+> 表中的 ❌ 是经 `mirror-check` 实测后**有意未启用**的组合（宁可不启用，也不生成错误源）：`tencent` 的 OpenWrt feed（标准 `releases/` 路径不可用）、`sustech` 与 `163` 的 Alpine（站点不提供 `/alpine/`）。
 
 > **没有默认镜像**：无论命令行还是交互菜单，镜像都由你自己选择，`mirrorsh` 不偏向任何一个（包括 TUNA）。Debian 的 security 源始终使用官方 `security.debian.org`，不会因为选了某个镜像而被替换。
 
