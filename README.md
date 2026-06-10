@@ -21,7 +21,6 @@ sh mirrorsh --mirror ustc --yes
 - [设计目标](#设计目标)
 - [支持的系统](#支持的系统)
 - [支持的镜像](#支持的镜像)
-- [为什么不包含清华 TUNA 源](#为什么不包含清华-tuna-源)
 - [为什么默认 protocol 是 auto](#为什么默认-protocol-是-auto)
 - [为什么小设备上 HTTPS 可能失败](#为什么小设备上-https-可能失败)
 - [为什么 OpenWrt 只替换基础地址](#为什么-openwrt-只替换基础地址)
@@ -66,6 +65,7 @@ sh mirrorsh --mirror ustc --yes
 | 镜像 | 名称 | Debian | Ubuntu | Ubuntu-ports | Alpine | OpenWrt |
 |------|------|:------:|:------:|:------------:|:------:|:-------:|
 | `ustc`    | 中科大        | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `tuna`    | 清华 TUNA     | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `aliyun`  | 阿里云        | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `tencent` | 腾讯云        | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `huawei`  | 华为云        | ✅ | ✅ | ✅ | ✅ | ✅ |
@@ -80,13 +80,9 @@ sh mirrorsh --mirror ustc --yes
 
 `official` 使用全球 CDN（`deb.debian.org`、`archive/ports.ubuntu.com`、`dl-cdn.alpinelinux.org`、`downloads.openwrt.org`），是最可靠的海外/兜底选项。
 
-> **关于海外镜像（kernel / jaist / riken / leaseweb）**：这些站点的实际可用路径需要逐一核实，第一版**未启用**，以免生成无法验证的 URL。它们已列入 `.github/workflows/mirror-check.yml` 的待验证清单，验证通过后会在后续版本加入支持矩阵。这符合本项目“宁可不启用，也不生成错误源”的原则。
+> **没有默认镜像**：无论命令行还是交互菜单，镜像都由你自己选择，`mirrorsh` 不偏向任何一个（包括 TUNA）。Debian 的 security 源始终使用官方 `security.debian.org`，不会因为选了某个镜像而被替换。
 
----
-
-## 为什么不包含清华 TUNA 源
-
-本项目**有意不包含**清华 TUNA 源。这是项目的明确策略，请勿提 PR 添加。其余高校与云厂商镜像已足够覆盖国内场景。
+> **关于海外镜像（kernel / jaist / riken / leaseweb）**：这些站点的实际可用路径需要逐一核实，当前**未启用**，以免生成无法验证的 URL。它们已列入 `.github/workflows/mirror-check.yml` 的待验证清单，验证通过后会在后续版本加入支持矩阵。这符合本项目“宁可不启用，也不生成错误源”的原则。
 
 ---
 
@@ -174,7 +170,7 @@ sh mirrorsh --restore                     # 恢复最近一次备份
 
 ```
 --help            显示帮助
---version         显示版本号 (v0.1.0)
+--version         显示版本号 (v0.1.0-rc1)
 --list            列出支持的系统、镜像与当前系统可用镜像
 --check           只检测系统信息, 不修改任何文件
 --mirror <name>   指定镜像 (ustc/aliyun/official ...)
@@ -246,6 +242,30 @@ sh mirrorsh --mirror ustc --yes      # 4. 确认网络 OK 后再带 update
 ```sh
 sh mirrorsh --restore                # 一键回到切换前的源
 ```
+
+---
+
+## 真实设备冒烟测试
+
+适合随身 WiFi / 软路由用户的最小验证流程（每一步都能停下并 `--restore`）：
+
+```sh
+sh mirrorsh --check
+sh mirrorsh --mirror ustc --dry-run
+sh mirrorsh --mirror ustc --yes --no-update
+cat /etc/apt/sources.list 2>/dev/null || true
+cat /etc/apk/repositories 2>/dev/null || true
+cat /etc/opkg/distfeeds.conf 2>/dev/null || true
+sh mirrorsh --restore
+```
+
+想试清华 TUNA（先预览，不写文件）：
+
+```sh
+sh mirrorsh --mirror tuna --dry-run
+```
+
+> ⚠️ **远程 SSH 连接设备时，第一次测试建议带 `--no-update`**：避免联网 `update` 过程卡住，让你误以为脚本失败。确认文件改对、`--restore` 能还原之后，再去掉 `--no-update`。
 
 ---
 
@@ -334,12 +354,20 @@ mirrorsh 只负责切换软件源并执行 update，不会执行 upgrade/full-up
 
 ## 测试与 CI
 
-主测试是**纯离线**的：用临时 `ROOT_DIR` 模拟系统，不碰宿主 `/etc`，不依赖镜像站网络。覆盖 Debian/Ubuntu/Alpine/OpenWrt 的源生成、deb822 禁用、dry-run、check、list、备份/恢复字节级一致、manifest 损坏处理、备份目录唯一性、非交互报错、交互无 tty 行为、HTTPS auto 判定与 HTTPS→HTTP 回退等共 100+ 个断言。
+主测试是**纯离线**的：用临时 `ROOT_DIR` 模拟系统，不碰宿主 `/etc`，不依赖镜像站网络。覆盖 Debian/Ubuntu/Alpine/OpenWrt 的源生成、TUNA 全组合、deb822 禁用、dry-run、check、list、备份/恢复字节级一致、manifest 损坏处理、备份目录唯一性、非交互报错、交互菜单选号逻辑与无 tty 行为、HTTPS auto 判定与 HTTPS→HTTP 回退等共 126 个断言。
 
 ```sh
 sh tests/run-tests.sh        # 任意 POSIX shell 均可
 dash tests/run-tests.sh
 busybox sh tests/run-tests.sh
+```
+
+### 发布前一键检查
+
+`tests/preflight.sh` 顺序跑全部门禁（语法 → sh 测试 → dash/busybox/shellcheck，可选项缺失则 skipped），任一必需项失败返回非零：
+
+```sh
+sh tests/preflight.sh
 ```
 
 ### 开发者测试机制
@@ -362,8 +390,36 @@ ROOT_DIR=/tmp/test-root sh mirrorsh --mirror ustc --yes --no-update
 
 ### GitHub Actions
 
-- `.github/workflows/test.yml`：push / PR 时在 `sh` 与 `dash` 下做 `-n` 语法检查 + 离线测试，并运行 `shellcheck -s sh mirrorsh tests/run-tests.sh`（shellcheck 仅 CI 依赖，用户设备无需安装）；权限收敛为 `contents: read`，输出测试摘要。
-- `.github/workflows/mirror-check.yml`：手动触发或每周定时，在线探测**所有已启用**镜像组合的可达性（HEAD，失败回退小 GET），在 Job Summary 输出 Markdown 支持矩阵；`continue-on-error`，**绝不阻塞**主测试。该矩阵必须与代码 `resolve_base()` 和本 README 的表格保持一致。
+- `.github/workflows/test.yml`：push / PR 时运行（权限 `contents: read`，全部离线、不写宿主 `/etc`），含：`sh` 与 `dash` 的 `-n` 语法检查 + 离线测试；**BusyBox sh** 测试（runner 不可用则 skipped）；**Alpine 容器**测试（Alpine 的 `/bin/sh` 即 BusyBox ash，仅只读挂载仓库目录）；`shellcheck -s sh mirrorsh tests/run-tests.sh tests/preflight.sh`（shellcheck 仅 CI 依赖，用户设备无需安装）。每个 job 都把 `pass/fail/skipped` 写入 Job Summary。
+- `.github/workflows/mirror-check.yml`：**仅** `workflow_dispatch` 或每周定时触发的**健康检查**，在线探测**所有已启用**镜像组合（含 TUNA）的可达性（HEAD，失败回退小 GET），在 Job Summary 输出 Markdown 矩阵。`continue-on-error: true`，**绝不阻塞**主 CI——它失败只代表某镜像站当时不可达，**不代表主测试失败或脚本有问题**。该矩阵与代码 `resolve_base()`、本 README 表格三方保持一致。
+
+---
+
+## 发布检查（v0.1.0-rc1）
+
+当前版本为发布候选 **v0.1.0-rc1**。打 tag 前：
+
+1. 本地或 CI 通过一键检查：
+   ```sh
+   sh tests/preflight.sh
+   ```
+2. GitHub Actions `test.yml` 全绿。
+3. 手动运行一次 `mirror-check.yml`，确认没有大面积 ❌（个别站点临时不可达可接受）。**因为本轮加入了 TUNA，务必确认 TUNA 那一行 5 个组合没有明显路径错误。**
+4. 在真实小设备上至少执行：
+   ```sh
+   sh mirrorsh --check
+   sh mirrorsh --list
+   sh mirrorsh --mirror ustc --dry-run
+   sh mirrorsh --mirror ustc --yes --no-update
+   sh mirrorsh --restore
+   ```
+5. 随身 WiFi / OpenWrt 上先用 `--no-update` 验证文件修改与 `--restore`，确认无误再联网 update。
+6. 打发布候选 tag：
+   ```sh
+   git tag v0.1.0-rc1
+   git push origin v0.1.0-rc1
+   ```
+7. 正式 `v0.1.0` 前，至少收集一次真实 Debian / Ubuntu / Alpine / OpenWrt 设备的反馈。
 
 ---
 
