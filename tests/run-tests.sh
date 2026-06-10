@@ -12,8 +12,10 @@
 # Test-harness shellcheck exemptions (not applicable to ./mirror.sh itself):
 #   SC1090 - we source ./mirror.sh dynamically via "$SCRIPT" on purpose
 #   SC2034 - CODENAME/MIRROR/... are read by the sourced functions, not here
-#   SC2329 - run_update/timestamp/system_year stubs are invoked indirectly
-# shellcheck disable=SC1090,SC2034,SC2329
+#   SC2329/SC2317 - run_update/timestamp/system_year stubs are redefined inside
+#                   sourced subshells and invoked indirectly (different shellcheck
+#                   versions flag this as "never invoked" or "unreachable")
+# shellcheck disable=SC1090,SC2034,SC2317,SC2329
 set -u
 
 unset CDPATH 2>/dev/null || true
